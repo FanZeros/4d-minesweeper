@@ -1,7 +1,8 @@
 // ------------------------------------------------------------------
 // 4D 扫雷引擎：在 n×n×n×n 超立方网格上运行经典扫雷规则
 // 坐标系: c = [x, y, z, w]，索引 i = ((w·n + z)·n + y)·n + x
-// 每个格子在四维空间中最多拥有 3⁴ - 1 = 80 个邻居
+// 邻域规则: 仅统计面相邻（每维 ±1 且其余维度不变），
+// 每个格子最多拥有 2×4 = 8 个邻居，不含对角线/棱/角
 // ------------------------------------------------------------------
 
 export type Axis = 0 | 1 | 2 | 3;
@@ -36,7 +37,19 @@ export function coordOf(n: number, i: number): number[] {
 
 const neighCache = new Map<number, Int32Array[]>();
 
-/** 预计算所有格子的 80 个 4D 邻居（按 n 缓存） */
+/** 面邻居偏移：每维 ±1、其余维度为 0（4D 下共 2×4 = 8 个，不含对角线/棱/角） */
+const FACE_OFFSETS = [
+  [1, 0, 0, 0],
+  [-1, 0, 0, 0],
+  [0, 1, 0, 0],
+  [0, -1, 0, 0],
+  [0, 0, 1, 0],
+  [0, 0, -1, 0],
+  [0, 0, 0, 1],
+  [0, 0, 0, -1],
+];
+
+/** 预计算所有格子的面邻居（每维 ±1，最多 8 个；按 n 缓存） */
 export function neighbors(n: number): Int32Array[] {
   const hit = neighCache.get(n);
   if (hit) return hit;
@@ -46,18 +59,15 @@ export function neighbors(n: number): Int32Array[] {
   for (let i = 0; i < total; i++) {
     const c = coordOf(n, i);
     tmp.length = 0;
-    for (let dx = -1; dx <= 1; dx++)
-      for (let dy = -1; dy <= 1; dy++)
-        for (let dz = -1; dz <= 1; dz++)
-          for (let dw = -1; dw <= 1; dw++) {
-            if (dx === 0 && dy === 0 && dz === 0 && dw === 0) continue;
-            const x = c[0] + dx;
-            const y = c[1] + dy;
-            const z = c[2] + dz;
-            const w = c[3] + dw;
-            if (x < 0 || y < 0 || z < 0 || w < 0 || x >= n || y >= n || z >= n || w >= n) continue;
-            tmp.push(((w * n + z) * n + y) * n + x);
-          }
+    for (let o = 0; o < FACE_OFFSETS.length; o++) {
+      const off = FACE_OFFSETS[o];
+      const x = c[0] + off[0];
+      const y = c[1] + off[1];
+      const z = c[2] + off[2];
+      const w = c[3] + off[3];
+      if (x < 0 || y < 0 || z < 0 || w < 0 || x >= n || y >= n || z >= n || w >= n) continue;
+      tmp.push(((w * n + z) * n + y) * n + x);
+    }
     all[i] = Int32Array.from(tmp);
   }
   neighCache.set(n, all);

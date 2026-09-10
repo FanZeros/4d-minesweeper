@@ -49,8 +49,8 @@ export default function HelpModal({ open, onClose }: Props) {
         <div className="flex flex-col gap-5">
           <Section icon={<Box size={15} />} title="什么是四维扫雷？">
             棋盘是一个 n×n×n×n 的超立方网格（X · Y · Z · W）。每个格子最多有
-            <span className="font-mono text-cyan-300"> 3⁴ − 1 = 80 </span>
-            个邻居：同一平面内的 8 个，加上相邻切片中的 72 个。数字 = 四维邻域内的地雷总数。
+            <span className="font-mono text-cyan-300"> 2×4 = 8 </span>
+            个面邻居：每个维度上前后各 1 格，不含对角线。数字 = 四维邻域内的地雷总数。
           </Section>
 
           <Section icon={<LayoutGrid size={15} />} title="全景视图 · 一次性俯瞰四维空间">

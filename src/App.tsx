@@ -50,7 +50,7 @@ function Hud({ g }: { g: GameApi }) {
         <HudChip icon={<Trophy size={13} />} label={`最佳 · ${g.diff.name}`} value={best != null ? fmtTime(best) : '--:--'} color="#fde047" />
         <div className="grow" />
         <span className="hidden font-mono text-[10px] tracking-wider text-slate-600 sm:inline">
-          {g.diff.n}⁴ = {b.total} 格 · 每格最多 80 邻域
+          {g.diff.n}⁴ = {b.total} 格 · 每格最多 8 邻域（仅面相邻）
         </span>
       </div>
       <div className="h-1 w-full overflow-hidden rounded-full bg-white/[0.06]">

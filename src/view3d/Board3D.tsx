@@ -161,6 +161,8 @@ export default function Board3D({ g }: { g: GameApi }) {
     }
     const neigh = neighbors(n);
     const scaleArr = new Float32Array(total);
+    // 每帧投影缓存: [px, py, pz, pr] × total
+    const proj = new Float32Array(total * 4);
 
     const syncTiles = () => {
       const b = gameRef.current.board;
@@ -303,7 +305,8 @@ export default function Board3D({ g }: { g: GameApi }) {
       const w = wrap.clientWidth;
       const h = wrap.clientHeight;
       if (w === 0 || h === 0) return;
-      renderer.setSize(w, h, false);
+      // 同步设置 canvas 的 CSS 尺寸，否则高 DPI 屏（DPR≥2）下会溢出容器导致画面不居中
+      renderer.setSize(w, h);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
     };
@@ -350,6 +353,12 @@ export default function Board3D({ g }: { g: GameApi }) {
         if (hover >= 0) setTip({ x: lastPtr.x, y: lastPtr.y, i: hover });
       }
 
+      // 第一遍：W 轴透视投影 + 累积投影质心。
+      // 透视公式 pr = w4/(w4-w2) 对 ±w2 不对称（+W 侧放大更多），
+      // 投影后整体质心会偏离原点，必须减掉质心才能保持画面居中。
+      let sumX = 0;
+      let sumY = 0;
+      let sumZ = 0;
       for (let k = 0; k < total; k++) {
         const bx = centered[k * 4];
         const by = centered[k * 4 + 1];
@@ -363,10 +372,27 @@ export default function Board3D({ g }: { g: GameApi }) {
         const w2 = by * syw + w1 * cyw;
         // W 轴透视投影 → 3D
         const pr = w4 / (w4 - w2);
-        let s = scaleArr[k] * pr;
+        const px = x1 * pr;
+        const py = y1 * pr;
+        const pz = bz * pr;
+        proj[k * 4] = px;
+        proj[k * 4 + 1] = py;
+        proj[k * 4 + 2] = pz;
+        proj[k * 4 + 3] = pr;
+        sumX += px;
+        sumY += py;
+        sumZ += pz;
+      }
+      const inv = 1 / total;
+      const cx0 = sumX * inv;
+      const cy0 = sumY * inv;
+      const cz0 = sumZ * inv;
+      // 第二遍：减去质心后写入实例矩阵（棋盘始终居中于相机目标点）
+      for (let k = 0; k < total; k++) {
+        let s = scaleArr[k] * proj[k * 4 + 3];
         if (k === exp) s *= 1 + 0.16 * Math.sin(t * 7);
         if (k === hover) s *= 1.14;
-        vp.set(x1 * pr, y1 * pr, bz * pr);
+        vp.set(proj[k * 4] - cx0, proj[k * 4 + 1] - cy0, proj[k * 4 + 2] - cz0);
         sc.setScalar(s);
         m4.compose(vp, q0, sc);
         mesh.setMatrixAt(k, m4);

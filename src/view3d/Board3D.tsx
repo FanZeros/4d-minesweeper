@@ -49,9 +49,12 @@ void main() {
   float uu = mix(vUv.x, 1.0 - vUv.x, flipU);
   vec2 tuv = vec2(col + 0.03 + uu * 0.94, (uRows - 1.0 - row) + 0.03 + vUv.y * 0.94);
   vec4 tex = texture2D(uAtlas, tuv / vec2(uCols, uRows));
+  vec3 N = normalize(vN);
   vec3 L = normalize(vec3(0.45, 0.85, 0.55));
-  float d = max(dot(normalize(vN), L), 0.0);
-  vec3 c = tex.rgb * (0.52 + 0.54 * d);
+  float d = max(dot(N, L), 0.0);
+  // 反向补光：背光/底面不再死黑，整体提亮
+  float fill = max(dot(N, normalize(vec3(-0.55, -0.25, -0.6))), 0.0);
+  vec3 c = tex.rgb * (0.68 + 0.42 * d + 0.30 * fill);
   c = mix(c, vec3(0.14, 0.83, 0.93), vHot * 0.5);
   c += vec3(0.05, 0.45, 0.55) * vHot * vHot * 0.4;
   gl_FragColor = vec4(c, 1.0);
@@ -133,7 +136,7 @@ export default function Board3D({ g }: { g: GameApi }) {
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
 
     const tex = new THREE.CanvasTexture(buildAtlas());
-    tex.colorSpace = THREE.SRGBColorSpace;
+    // 图集按 sRGB 设计值直通采样：不做硬件 sRGB 解码（线性化后自写 shader 无输出补偿，整体会偏暗）
     tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
 
     const geo = new THREE.BoxGeometry(0.82, 0.82, 0.82);

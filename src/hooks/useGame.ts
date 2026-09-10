@@ -18,9 +18,10 @@ export interface Difficulty {
 }
 
 export const DIFFICULTIES: Difficulty[] = [
-  { id: 'rookie', name: '新域', sub: '4⁴ · 20 雷', n: 4, mines: 20 },
-  { id: 'standard', name: '标准', sub: '5⁴ · 60 雷', n: 5, mines: 60 },
-  { id: 'expert', name: '超维', sub: '6⁴ · 130 雷', n: 6, mines: 130 },
+  { id: 'nano', name: '微界', sub: '2⁴ · 3 雷', n: 2, mines: 3 },
+  { id: 'rookie', name: '新域', sub: '3⁴ · 12 雷', n: 3, mines: 12 },
+  { id: 'standard', name: '标准', sub: '4⁴ · 20 雷', n: 4, mines: 20 },
+  { id: 'expert', name: '超维', sub: '5⁴ · 60 雷', n: 5, mines: 60 },
 ];
 
 /** 视角状态: h/v = 当前显示的水平/垂直轴; pos = 每个切片轴上的位置 */
@@ -43,8 +44,8 @@ function loadJSON<T>(key: string, fallback: T): T {
 }
 
 export function useGame() {
-  const [diff, setDiff] = useState<Difficulty>(DIFFICULTIES[1]);
-  const boardRef = useRef<BoardData>(createBoard(DIFFICULTIES[1].n, DIFFICULTIES[1].mines));
+  const [diff, setDiff] = useState<Difficulty>(DIFFICULTIES[2]);
+  const boardRef = useRef<BoardData>(createBoard(DIFFICULTIES[2].n, DIFFICULTIES[2].mines));
   const [tick, setTick] = useState(0);
   const [time, setTime] = useState(0);
   const [mode, setModeState] = useState<PlayMode>('open');

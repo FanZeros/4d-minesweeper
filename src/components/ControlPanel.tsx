@@ -185,7 +185,7 @@ export default function ControlPanel({ g }: { g: GameApi }) {
       {/* 难度 / 新对局 */}
       <section className="panel p-4">
         <SectionTitle icon={<Sparkles size={13} />} text="对局" />
-        <div className="grid grid-cols-3 gap-1.5">
+        <div className="grid grid-cols-4 gap-1.5">
           {DIFFICULTIES.map((d) => (
             <button
               key={d.id}

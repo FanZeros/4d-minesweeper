@@ -16,6 +16,11 @@ body,
   min-height: 100%;
 }
 
+/* 双保险：防止任何意外元素把页面顶出横向可拖动 */
+html {
+  overflow-x: hidden;
+}
+
 body {
   background: var(--bg);
   color: #e2e8f0;

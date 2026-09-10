@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Focus } from 'lucide-react';
 import { Cell } from './Cell';
 import { coordOf, indexOf, neighbors, type Axis } from '../lib/engine';
@@ -62,7 +62,26 @@ export default function SliceBoard({ g }: { g: GameApi }) {
   const h = g.view.h;
   const v = g.view.v;
   const [oh, ov] = hiddenAxes(h, v);
-  const cs = n === 4 ? 66 : n === 5 ? 54 : 46;
+
+  // 跟踪视口尺寸，让格子随窗口自适应
+  const [vp, setVp] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }));
+  useEffect(() => {
+    const f = () => setVp({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener('resize', f);
+    return () => window.removeEventListener('resize', f);
+  }, []);
+
+  // 格子尺寸 = min(可用宽, 52% 视口高) / n，clamp 到 [40, 88]
+  // 可用宽：窄屏扣页面边距，桌面扣右侧栏 + 面板内边距/间隙
+  const cs = Math.max(
+    40,
+    Math.min(
+      88,
+      Math.floor(
+        Math.min(vp.w < 1024 ? vp.w - 76 : vp.w - 428, vp.h * 0.52 - 28 - (n - 1) * 4) / n,
+      ),
+    ),
+  );
   const [hover, setHover] = useState<number | null>(null);
   const ns = useMemo(() => neighbors(n), [n]);
 

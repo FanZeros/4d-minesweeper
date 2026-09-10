@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Cell } from './Cell';
 import { coordOf, indexOf, neighbors } from '../lib/engine';
 import { AXES, hiddenAxes, range } from '../lib/axis';
@@ -16,7 +16,28 @@ export default function AllSlicesBoard({ g }: { g: GameApi }) {
   const h = g.view.h;
   const v = g.view.v;
   const [oh, ov] = hiddenAxes(h, v);
-  const cs = n === 4 ? 22 : n === 5 ? 15 : 11;
+
+  // 测量面板可用宽度，让格子尺寸随窗口自适应
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [availW, setAvailW] = useState(0);
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setAvailW(el.clientWidth));
+    ro.observe(el);
+    setAvailW(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
+
+  // 格子尺寸 = f(面板宽, 视口高)，clamp 到 [12, 40]
+  // 面板宽 ≈ 24(p-3) + 16(图例列) + 9n(列间隙) + n*(n*cs + (n-1)(格间隙) + 8(切片padding+ring))
+  // 视口高预留 200px 给头部/HUD/说明行
+  const cs = useMemo(() => {
+    if (!availW) return n === 4 ? 22 : n === 5 ? 15 : 11; // 首帧回退旧值
+    const csW = (availW - 24 - 16 - 9 * n - n * (n - 1) - 8 * n) / (n * n);
+    const csH = (window.innerHeight - 200 - 19 - 9 * (n - 1) - n * (n - 1) - 8 * n) / (n * n);
+    return Math.max(12, Math.min(40, Math.floor(Math.min(csW, csH))));
+  }, [availW, n]);
 
   const hot = useMemo(() => {
     if (hover == null || !g.hoverPreview) return null;
@@ -60,6 +81,7 @@ export default function AllSlicesBoard({ g }: { g: GameApi }) {
   return (
     <div className="flex flex-col gap-2">
       <div
+        ref={wrapRef}
         className="w-full overflow-auto rounded-2xl border border-white/[0.07] bg-slate-950/70 p-3 shadow-[0_24px_70px_-24px_rgba(0,0,0,0.9)] backdrop-blur"
         onMouseLeave={() => setHover(null)}
       >

@@ -1,44 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Boxes, Orbit, Pause, Play, Rotate3d, RotateCcw } from 'lucide-react';
-import { coordOf, neighbors } from '../lib/engine';
+import { coordOf, indexOf, neighbors } from '../lib/engine';
 import { AXES } from '../lib/axis';
 import { COLS, ROWS, T_FLAG, T_HIDDEN, T_MINE, T_BOOM, T_WRONG, T_NUM, buildAtlas } from './atlas';
 import type { GameApi } from '../hooks/useGame';
 import spacePano from '../assets/space-panorama.jpg';
 
-// 立方体 8 顶点符号组合（±1,±1,±1）与 12 条边的顶点索引（用于每格 tesseract 远胞线框）
-const CUBE_SIGNS: ReadonlyArray<readonly [number, number, number]> = [
-  [-1, -1, -1],
-  [1, -1, -1],
-  [-1, 1, -1],
-  [1, 1, -1],
-  [-1, -1, 1],
-  [1, -1, 1],
-  [-1, 1, 1],
-  [1, 1, 1],
-];
-const CUBE_EDGES: ReadonlyArray<readonly [number, number]> = [
-  [0, 1],
-  [2, 3],
-  [4, 5],
-  [6, 7],
-  [0, 2],
-  [1, 3],
-  [4, 6],
-  [5, 7],
-  [0, 4],
-  [1, 5],
-  [2, 6],
-  [3, 7],
-];
-// 每格写入的线段顶点数：远胞 12 边(24) + 内外顶点连线 8 条(16)
-const TESS_V_PER_CELL = 40;
-
 /**
  * 3D 超投影视图：
- * 整个 n⁴ 四维棋盘在 XW / YW 平面中旋转后，沿 W 轴透视投影到三维，
- * 每个格子是一颗立方体 —— 近处的大方块来自高 W 层，远处的来自低 W 层。
+ * 整个 n⁴ 四维棋盘在 XW / YW 平面中旋转后，沿 W 轴透视投影到三维。
+ * 格子是晶格内部的实体；开启 4D 结构时，叠加一条含 W 棱的超立方晶格。
  */
 
 const VERT = `
@@ -62,7 +34,6 @@ const FRAG = `
 uniform sampler2D uAtlas;
 uniform float uCols;
 uniform float uRows;
-uniform float uAlpha;
 varying vec2 vUv;
 varying vec3 vN;
 varying float vTile;
@@ -87,12 +58,7 @@ void main() {
   vec3 c = tex.rgb * (0.80 + 0.30 * d + 0.36 * fill);
   c = mix(c, vec3(0.14, 0.83, 0.93), vHot * 0.5);
   c += vec3(0.05, 0.45, 0.55) * vHot * vHot * 0.4;
-  // 玻璃化透明度分级：未揭开格最通透（内核 4D 结构为主角），
-  // 旗格居中（旗 + 结构都可见），已开/数字格最实（数字优先可读）
-  float a = 0.85;
-  if (t < 0.5) a = 0.4;
-  else if (t > 81.5 && t < 82.5) a = 0.55;
-  gl_FragColor = vec4(c, mix(1.0, a, uAlpha));
+  gl_FragColor = vec4(c, 1.0);
 }
 `;
 
@@ -182,7 +148,7 @@ export default function Board3D({ g }: { g: GameApi }) {
     // 图集按 sRGB 设计值直通采样：不做硬件 sRGB 解码（线性化后自写 shader 无输出补偿，整体会偏暗）
     tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
 
-    const geo = new THREE.BoxGeometry(0.96, 0.96, 0.96);
+    const geo = new THREE.BoxGeometry(0.46, 0.46, 0.46);
     const tileAttr = new THREE.InstancedBufferAttribute(new Float32Array(total), 1);
     const hotAttr = new THREE.InstancedBufferAttribute(new Float32Array(total), 1);
     tileAttr.setUsage(THREE.DynamicDrawUsage);
@@ -193,90 +159,39 @@ export default function Board3D({ g }: { g: GameApi }) {
     const mat = new THREE.ShaderMaterial({
       vertexShader: VERT,
       fragmentShader: FRAG,
-      uniforms: {
-        uAtlas: { value: tex },
-        uCols: { value: COLS },
-        uRows: { value: ROWS },
-        uAlpha: { value: 1.0 },
-      },
-      transparent: true,
-      depthWrite: false,
+      uniforms: { uAtlas: { value: tex }, uCols: { value: COLS }, uRows: { value: ROWS } },
     });
     const mesh = new THREE.InstancedMesh(geo, mat, total);
     mesh.frustumCulled = false;
     scene.add(mesh);
 
-    // 每格 tesseract：玻璃盒内悬浮的「远端胞」核心（不透明实体，唯一写深度者，正确遮挡）
-    // + 核心胞 12 边线 + 外盒顶点到核心顶点的 8 条连线（共 40 线段顶点/格）
-    const coreGeo = new THREE.BoxGeometry(1, 1, 1);
-    const coreMat = new THREE.MeshBasicMaterial({ color: 0x155e75 });
-    const coreMesh = new THREE.InstancedMesh(coreGeo, coreMat, total);
-    coreMesh.frustumCulled = false;
-    scene.add(coreMesh);
-
-    const linkPos = new Float32Array(total * TESS_V_PER_CELL * 3);
-    const linkGeo = new THREE.BufferGeometry();
-    linkGeo.setAttribute('position', new THREE.BufferAttribute(linkPos, 3));
-    const linkMat = new THREE.LineBasicMaterial({
-      color: 0x22d3ee,
-      transparent: true,
-      opacity: 0.5,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
-    const linkLines = new THREE.LineSegments(linkGeo, linkMat);
-    linkLines.frustumCulled = false;
-    scene.add(linkLines);
-
-    // 整体棱线网格：所有盒子的外棱在 4D 空间去重（相邻盒子共享的棱只画一次），
-    // 让格子连接成一个连续的大立方体网格（整体大 tesseract 的外壳）
-    const halfOff = (n - 1) / 2;
+    // 真实 4D 超立方晶格：格子中心沿 ±X/±Y/±Z/±W 各连一条棱。
+    // 无向边去重后，相邻格子共享同一条 4D 棱；W 棱会在投影后变成「里外层」连线。
     const seenEdges = new Set<string>();
-    const edgeQs: number[] = [];
-    const edgeLess = (p: number[], q: number[]) => {
-      for (let i = 0; i < 4; i++) {
-        if (p[i] !== q[i]) return p[i] < q[i];
-      }
-      return false;
+    const edgeEnds: number[] = [];
+    const addUndirected = (a: number, b: number) => {
+      const lo = a < b ? a : b;
+      const hi = a < b ? b : a;
+      const key = `${lo},${hi}`;
+      if (seenEdges.has(key)) return;
+      seenEdges.add(key);
+      edgeEnds.push(lo, hi);
     };
     for (let k = 0; k < total; k++) {
       const c = coordOf(n, k);
-      for (let e = 0; e < 12; e++) {
-        const a = CUBE_EDGES[e][0];
-        const b = CUBE_EDGES[e][1];
-        const sa = CUBE_SIGNS[a];
-        const sb = CUBE_SIGNS[b];
-        if (!sa || !sb) continue;
-        // 棱端点编码（×2 域）：XYZ = 2c + sign（奇偶区分 ±0.48）；
-        // W = 2c 固定层中心（3D 盒在 w 方向无厚度，同层棱的 w 相同）
-        const qa = [
-          2 * c[0] + (sa[0] > 0 ? 1 : 0),
-          2 * c[1] + (sa[1] > 0 ? 1 : 0),
-          2 * c[2] + (sa[2] > 0 ? 1 : 0),
-          2 * c[3],
-        ];
-        const qb = [
-          2 * c[0] + (sb[0] > 0 ? 1 : 0),
-          2 * c[1] + (sb[1] > 0 ? 1 : 0),
-          2 * c[2] + (sb[2] > 0 ? 1 : 0),
-          2 * c[3],
-        ];
-        // 无向边规范化：小端点在前，字符串编码去重
-        const key = (edgeLess(qa, qb) ? [...qa, ...qb] : [...qb, ...qa]).join(',');
-        if (seenEdges.has(key)) continue;
-        seenEdges.add(key);
-        edgeQs.push(qa[0], qa[1], qa[2], qa[3], qb[0], qb[1], qb[2], qb[3]);
-      }
+      if (c[0] + 1 < n) addUndirected(k, indexOf(n, [c[0] + 1, c[1], c[2], c[3]]));
+      if (c[1] + 1 < n) addUndirected(k, indexOf(n, [c[0], c[1] + 1, c[2], c[3]]));
+      if (c[2] + 1 < n) addUndirected(k, indexOf(n, [c[0], c[1], c[2] + 1, c[3]]));
+      if (c[3] + 1 < n) addUndirected(k, indexOf(n, [c[0], c[1], c[2], c[3] + 1]));
     }
-    const edgeQ = new Int32Array(edgeQs);
-    const edgeCount = edgeQs.length / 8;
+    const edgeCount = edgeEnds.length / 2;
     const edgePos = new Float32Array(edgeCount * 6);
     const edgeGeo = new THREE.BufferGeometry();
     edgeGeo.setAttribute('position', new THREE.BufferAttribute(edgePos, 3));
     const edgeMat = new THREE.LineBasicMaterial({
       color: 0x22d3ee,
       transparent: true,
-      opacity: 0.4,
+      opacity: 0.55,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
@@ -517,8 +432,7 @@ export default function Board3D({ g }: { g: GameApi }) {
       const cx0 = sumX * inv;
       const cy0 = sumY * inv;
       const cz0 = sumZ * inv;
-      // 第二遍：减去质心后写入实例矩阵（棋盘始终居中于相机目标点），
-      // 并为每格写入 tesseract 远胞线框（开启 4D 胞结构时）
+      // 第二遍：格子作为晶格内部实体；同时把 4D 邻接棱投影成连续网格
       const showTess = tessRef.current;
       for (let k = 0; k < total; k++) {
         const w2 = proj[k * 4 + 3];
@@ -532,72 +446,23 @@ export default function Board3D({ g }: { g: GameApi }) {
         sc.setScalar(s);
         m4.compose(vp, q0, sc);
         mesh.setMatrixAt(k, m4);
-
-        if (showTess) {
-          // 内核胞：居中悬浮于玻璃盒内（经典 cube-in-cube），大小随该格 W 分量呼吸
-          const w2n = w2 / w4;
-          const ch = s * 0.3 * (1 - 0.22 * w2n); // 核心半宽
-          vp.set(px, py, pz);
-          sc.setScalar(ch / 0.5); // coreGeo 尺寸 1，half = 0.5
-          m4.compose(vp, q0, sc);
-          coreMesh.setMatrixAt(k, m4);
-          const oh = s * 0.485; // 外盒角（0.48*1.01，贴合玻璃棱）
-          const oh2 = ch * 1.02; // 核心角（微外扩防 z-fighting）
-          let o = k * TESS_V_PER_CELL * 3;
-          // 核心胞 12 条边
-          for (let e = 0; e < 12; e++) {
-            const a = CUBE_EDGES[e][0];
-            const b = CUBE_EDGES[e][1];
-            linkPos[o++] = px + CUBE_SIGNS[a][0] * oh2;
-            linkPos[o++] = py + CUBE_SIGNS[a][1] * oh2;
-            linkPos[o++] = pz + CUBE_SIGNS[a][2] * oh2;
-            linkPos[o++] = px + CUBE_SIGNS[b][0] * oh2;
-            linkPos[o++] = py + CUBE_SIGNS[b][1] * oh2;
-            linkPos[o++] = pz + CUBE_SIGNS[b][2] * oh2;
-          }
-          // 外盒 8 顶点 → 核心胞对应顶点
-          for (let m = 0; m < 8; m++) {
-            linkPos[o++] = px + CUBE_SIGNS[m][0] * oh;
-            linkPos[o++] = py + CUBE_SIGNS[m][1] * oh;
-            linkPos[o++] = pz + CUBE_SIGNS[m][2] * oh;
-            linkPos[o++] = px + CUBE_SIGNS[m][0] * oh2;
-            linkPos[o++] = py + CUBE_SIGNS[m][1] * oh2;
-            linkPos[o++] = pz + CUBE_SIGNS[m][2] * oh2;
-          }
-        }
       }
       mesh.instanceMatrix.needsUpdate = true;
-      coreMesh.visible = showTess;
-      if (showTess) coreMesh.instanceMatrix.needsUpdate = true;
-      linkLines.visible = showTess;
       edgeLines.visible = showTess;
       if (showTess) {
-        (linkGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
-        // 整体棱线网格投影（与格子同一 4D 旋转/透视/质心，端点 ±0.48 贴合玻璃棱）
-        let src = 0;
         let dst = 0;
         for (let ei = 0; ei < edgeCount; ei++) {
-          for (let v = 0; v < 2; v++) {
-            const X = (edgeQ[src] >> 1) - halfOff + (edgeQ[src] & 1 ? 0.48 : -0.48);
-            const Y = (edgeQ[src + 1] >> 1) - halfOff + (edgeQ[src + 1] & 1 ? 0.48 : -0.48);
-            const Z = (edgeQ[src + 2] >> 1) - halfOff + (edgeQ[src + 2] & 1 ? 0.48 : -0.48);
-            const W = (edgeQ[src + 3] >> 1) - halfOff; // w 层中心（无 ±0.48）
-            src += 4;
-            const x1 = X * cxw - W * sxw;
-            const w1 = X * sxw + W * cxw;
-            const y1 = Y * cyw - w1 * syw;
-            const w2e = Y * syw + w1 * cyw;
-            const pre = w4 / (w4 - w2e);
-            edgePos[dst++] = x1 * pre - cx0;
-            edgePos[dst++] = y1 * pre - cy0;
-            edgePos[dst++] = Z * pre - cz0;
-          }
+          const a = edgeEnds[ei * 2];
+          const b = edgeEnds[ei * 2 + 1];
+          edgePos[dst++] = proj[a * 4] - cx0;
+          edgePos[dst++] = proj[a * 4 + 1] - cy0;
+          edgePos[dst++] = proj[a * 4 + 2] - cz0;
+          edgePos[dst++] = proj[b * 4] - cx0;
+          edgePos[dst++] = proj[b * 4 + 1] - cy0;
+          edgePos[dst++] = proj[b * 4 + 2] - cz0;
         }
         (edgeGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
       }
-      // 玻璃化：开启胞结构时外盒半透明且不写深度；关闭时恢复完全不透明
-      mat.uniforms.uAlpha.value = showTess ? 1.0 : 0.0;
-      mat.depthWrite = !showTess;
 
       const sp = Math.sin(v.phi);
       camera.position.set(v.r * sp * Math.sin(v.theta), v.r * Math.cos(v.phi), v.r * sp * Math.cos(v.theta));
@@ -623,10 +488,6 @@ export default function Board3D({ g }: { g: GameApi }) {
       geo.dispose();
       mat.dispose();
       tex.dispose();
-      coreGeo.dispose();
-      coreMat.dispose();
-      linkGeo.dispose();
-      linkMat.dispose();
       edgeGeo.dispose();
       edgeMat.dispose();
       renderer.dispose();
@@ -678,7 +539,7 @@ export default function Board3D({ g }: { g: GameApi }) {
           <ToolBtn onClick={() => setAuto((a) => !a)} title={auto ? '暂停自动旋转' : '开启自动旋转'}>
             {auto ? <Pause size={15} /> : <Play size={15} />}
           </ToolBtn>
-          <ToolBtn active={tess} onClick={() => setTess((x) => !x)} title="4D 胞结构：每格显示超立方体远端胞投影">
+          <ToolBtn active={tess} onClick={() => setTess((x) => !x)} title="4D 晶格：显示沿 X/Y/Z/W 的真实超立方连接">
             <Boxes size={15} />
           </ToolBtn>
           <ToolBtn
@@ -698,7 +559,7 @@ export default function Board3D({ g }: { g: GameApi }) {
               {a.name} · {a.cn}
             </span>
           ))}
-          <span className="mt-0.5 text-slate-600">W 越高方块越大</span>
+          <span className="mt-0.5 text-slate-600">青色线 = 4D 邻接棱</span>
         </div>
 
         {/* 悬停提示 */}

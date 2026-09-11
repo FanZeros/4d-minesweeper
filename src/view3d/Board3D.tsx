@@ -62,6 +62,7 @@ const FRAG = `
 uniform sampler2D uAtlas;
 uniform float uCols;
 uniform float uRows;
+uniform float uAlpha;
 varying vec2 vUv;
 varying vec3 vN;
 varying float vTile;
@@ -86,7 +87,12 @@ void main() {
   vec3 c = tex.rgb * (0.80 + 0.30 * d + 0.36 * fill);
   c = mix(c, vec3(0.14, 0.83, 0.93), vHot * 0.5);
   c += vec3(0.05, 0.45, 0.55) * vHot * vHot * 0.4;
-  gl_FragColor = vec4(c, 1.0);
+  // 玻璃化透明度分级：未揭开格最通透（内核 4D 结构为主角），
+  // 旗格居中（旗 + 结构都可见），已开/数字格最实（数字优先可读）
+  float a = 0.85;
+  if (t < 0.5) a = 0.4;
+  else if (t > 81.5 && t < 82.5) a = 0.55;
+  gl_FragColor = vec4(c, mix(1.0, a, uAlpha));
 }
 `;
 
@@ -187,26 +193,40 @@ export default function Board3D({ g }: { g: GameApi }) {
     const mat = new THREE.ShaderMaterial({
       vertexShader: VERT,
       fragmentShader: FRAG,
-      uniforms: { uAtlas: { value: tex }, uCols: { value: COLS }, uRows: { value: ROWS } },
+      uniforms: {
+        uAtlas: { value: tex },
+        uCols: { value: COLS },
+        uRows: { value: ROWS },
+        uAlpha: { value: 1.0 },
+      },
+      transparent: true,
+      depthWrite: false,
     });
     const mesh = new THREE.InstancedMesh(geo, mat, total);
     mesh.frustumCulled = false;
     scene.add(mesh);
 
-    // 每格 tesseract 投影：远端胞线框（12 边）+ 内外顶点连线（8 条）
-    const tessPos = new Float32Array(total * TESS_V_PER_CELL * 3);
-    const tessGeo = new THREE.BufferGeometry();
-    tessGeo.setAttribute('position', new THREE.BufferAttribute(tessPos, 3));
-    const tessMat = new THREE.LineBasicMaterial({
+    // 每格 tesseract：玻璃盒内悬浮的「远端胞」核心（不透明实体，唯一写深度者，正确遮挡）
+    // + 核心胞 12 边线 + 外盒顶点到核心顶点的 8 条连线（共 40 线段顶点/格）
+    const coreGeo = new THREE.BoxGeometry(1, 1, 1);
+    const coreMat = new THREE.MeshBasicMaterial({ color: 0x155e75 });
+    const coreMesh = new THREE.InstancedMesh(coreGeo, coreMat, total);
+    coreMesh.frustumCulled = false;
+    scene.add(coreMesh);
+
+    const linkPos = new Float32Array(total * TESS_V_PER_CELL * 3);
+    const linkGeo = new THREE.BufferGeometry();
+    linkGeo.setAttribute('position', new THREE.BufferAttribute(linkPos, 3));
+    const linkMat = new THREE.LineBasicMaterial({
       color: 0x22d3ee,
       transparent: true,
-      opacity: 0.3,
+      opacity: 0.5,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
-    const tessLines = new THREE.LineSegments(tessGeo, tessMat);
-    tessLines.frustumCulled = false;
-    scene.add(tessLines);
+    const linkLines = new THREE.LineSegments(linkGeo, linkMat);
+    linkLines.frustumCulled = false;
+    scene.add(linkLines);
 
     // 预计算中心化四维坐标
     const centered = new Float32Array(total * 4);
@@ -458,52 +478,46 @@ export default function Board3D({ g }: { g: GameApi }) {
         mesh.setMatrixAt(k, m4);
 
         if (showTess) {
-          // 远端胞：沿「格心相对棋盘中心的径向」拖到盒后方，
-          // 大小随该格 W 分量变化 —— 4D 旋转时内核游走缩放
+          // 内核胞：居中悬浮于玻璃盒内（经典 cube-in-cube），大小随该格 W 分量呼吸
           const w2n = w2 / w4;
-          let dx = px;
-          let dy = py;
-          let dz = pz;
-          const cl = Math.sqrt(px * px + py * py + pz * pz);
-          if (cl < 1e-4) {
-            dx = 0.6;
-            dy = 0.6;
-            dz = 0.5;
-          } else {
-            dx /= cl;
-            dy /= cl;
-            dz /= cl;
-          }
-          const off = s * 0.68;
-          const ix = px + dx * off;
-          const iy = py + dy * off;
-          const iz = pz + dz * off;
-          const ih = s * 0.15 * (1 - 0.3 * w2n);
-          const oh = s * 0.422;
+          const ch = s * 0.3 * (1 - 0.22 * w2n); // 核心半宽
+          vp.set(px, py, pz);
+          sc.setScalar(ch / 0.5); // coreGeo 尺寸 1，half = 0.5
+          m4.compose(vp, q0, sc);
+          coreMesh.setMatrixAt(k, m4);
+          const oh = s * 0.415; // 外盒角（略内收于 0.41*1.02，贴合玻璃面）
+          const oh2 = ch * 1.02; // 核心角（微外扩防 z-fighting）
           let o = k * TESS_V_PER_CELL * 3;
+          // 核心胞 12 条边
           for (let e = 0; e < 12; e++) {
             const a = CUBE_EDGES[e][0];
             const b = CUBE_EDGES[e][1];
-            tessPos[o++] = ix + CUBE_SIGNS[a][0] * ih;
-            tessPos[o++] = iy + CUBE_SIGNS[a][1] * ih;
-            tessPos[o++] = iz + CUBE_SIGNS[a][2] * ih;
-            tessPos[o++] = ix + CUBE_SIGNS[b][0] * ih;
-            tessPos[o++] = iy + CUBE_SIGNS[b][1] * ih;
-            tessPos[o++] = iz + CUBE_SIGNS[b][2] * ih;
+            linkPos[o++] = px + CUBE_SIGNS[a][0] * oh2;
+            linkPos[o++] = py + CUBE_SIGNS[a][1] * oh2;
+            linkPos[o++] = pz + CUBE_SIGNS[a][2] * oh2;
+            linkPos[o++] = px + CUBE_SIGNS[b][0] * oh2;
+            linkPos[o++] = py + CUBE_SIGNS[b][1] * oh2;
+            linkPos[o++] = pz + CUBE_SIGNS[b][2] * oh2;
           }
+          // 外盒 8 顶点 → 核心胞对应顶点
           for (let m = 0; m < 8; m++) {
-            tessPos[o++] = px + CUBE_SIGNS[m][0] * oh;
-            tessPos[o++] = py + CUBE_SIGNS[m][1] * oh;
-            tessPos[o++] = pz + CUBE_SIGNS[m][2] * oh;
-            tessPos[o++] = ix + CUBE_SIGNS[m][0] * ih;
-            tessPos[o++] = iy + CUBE_SIGNS[m][1] * ih;
-            tessPos[o++] = iz + CUBE_SIGNS[m][2] * ih;
+            linkPos[o++] = px + CUBE_SIGNS[m][0] * oh;
+            linkPos[o++] = py + CUBE_SIGNS[m][1] * oh;
+            linkPos[o++] = pz + CUBE_SIGNS[m][2] * oh;
+            linkPos[o++] = px + CUBE_SIGNS[m][0] * oh2;
+            linkPos[o++] = py + CUBE_SIGNS[m][1] * oh2;
+            linkPos[o++] = pz + CUBE_SIGNS[m][2] * oh2;
           }
         }
       }
       mesh.instanceMatrix.needsUpdate = true;
-      tessLines.visible = showTess;
-      if (showTess) (tessGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+      coreMesh.visible = showTess;
+      if (showTess) coreMesh.instanceMatrix.needsUpdate = true;
+      linkLines.visible = showTess;
+      if (showTess) (linkGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+      // 玻璃化：开启胞结构时外盒半透明且不写深度；关闭时恢复完全不透明
+      mat.uniforms.uAlpha.value = showTess ? 1.0 : 0.0;
+      mat.depthWrite = !showTess;
 
       const sp = Math.sin(v.phi);
       camera.position.set(v.r * sp * Math.sin(v.theta), v.r * Math.cos(v.phi), v.r * sp * Math.cos(v.theta));
@@ -529,8 +543,10 @@ export default function Board3D({ g }: { g: GameApi }) {
       geo.dispose();
       mat.dispose();
       tex.dispose();
-      tessGeo.dispose();
-      tessMat.dispose();
+      coreGeo.dispose();
+      coreMat.dispose();
+      linkGeo.dispose();
+      linkMat.dispose();
       renderer.dispose();
       if (el.parentElement === wrap) wrap.removeChild(el);
     };

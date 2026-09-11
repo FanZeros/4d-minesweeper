@@ -1,4 +1,4 @@
-import { X, Box, Boxes, LayoutGrid, RotateCw, Flag, MousePointerClick, Lightbulb } from 'lucide-react';
+import { X, Box, Boxes, LayoutGrid, Flag, MousePointerClick, Lightbulb } from 'lucide-react';
 
 interface Props {
   open: boolean;
@@ -70,12 +70,6 @@ export default function HelpModal({ open, onClose }: Props) {
             额外画出 W 方向的邻接棱（投影后是里外层之间的连线）。
           </Section>
 
-          <Section icon={<RotateCw size={15} />} title="视角旋转 · 90° 超平面旋转">
-            四维空间有 6 个基础旋转平面：XY / XZ / XW / YZ / YW / ZW。
-            点击即可把对应平面旋转 90°，重新安排哪些轴进入视野、哪些变成切片轴。
-            也可以直接在「空间朝向」里自由指定水平/垂直显示轴。
-          </Section>
-
           <Section icon={<Lightbulb size={15} />} title="周围雷数提示">
             悬停任意未揭开的格子，青色高亮会透视出它在四维空间中的全部邻居——那些
             分布在邻近切片里的格子同样会被照亮，这正是理解 4D 邻域的关键。
@@ -93,13 +87,7 @@ export default function HelpModal({ open, onClose }: Props) {
                 <kbd className="rounded border border-white/15 bg-white/5 px-1">F</kbd> 切换标旗模式
               </span>
               <span>
-                <kbd className="rounded border border-white/15 bg-white/5 px-1">R</kbd> 旋转当前显示平面
-              </span>
-              <span>
-                <kbd className="rounded border border-white/15 bg-white/5 px-1">V</kbd> 切换视图
-              </span>
-              <span>
-                <kbd className="rounded border border-white/15 bg-white/5 px-1">←→↑↓</kbd> 游走切片
+               <kbd className="rounded border border-white/15 bg-white/5 px-1">V</kbd> 切换视图
               </span>
               <span className="text-cyan-300/80 sm:col-span-2">胜利：揭开所有安全格</span>
             </div>

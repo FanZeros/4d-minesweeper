@@ -174,32 +174,6 @@ export function useGame() {
     [diff, bump],
   );
 
-  /** 沿 (a, b) 平面做 90° 视角旋转：交换两条显示/切片轴的身份 */
-  const rotate = useCallback((a: Axis, b: Axis) => {
-    setView((prev) => {
-      const swapAxis = (x: Axis): Axis => (x === a ? b : x === b ? a : x);
-      const pos = prev.pos.slice();
-      const t = pos[a];
-      pos[a] = pos[b];
-      pos[b] = t;
-      return { h: swapAxis(prev.h), v: swapAxis(prev.v), pos };
-    });
-    sfx.rotate();
-  }, []);
-
-  /** 维度切换：直接指定水平/垂直显示轴；若与另一轴冲突则交换 */
-  const setAxis = useCallback((which: 'h' | 'v', axis: Axis) => {
-    setView((prev) => {
-      if (prev[which] === axis) return prev;
-      const other = which === 'h' ? 'v' : 'h';
-      const next: ViewState = { h: prev.h, v: prev.v, pos: prev.pos };
-      if (prev[other] === axis) next[other] = prev[which];
-      next[which] = axis;
-      return next;
-    });
-    sfx.rotate();
-  }, []);
-
   const setMode = useCallback((m: PlayMode) => {
     setModeState(m);
     sfx.ui();
@@ -218,8 +192,6 @@ export function useGame() {
     mode,
     setMode,
     view,
-    setAxis,
-    rotate,
     viewMode,
     setViewMode,
     hoverPreview,

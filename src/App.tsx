@@ -129,14 +129,13 @@ export default function App() {
     }
   };
 
-  // 键盘快捷键: F 标旗 · R 旋转当前显示平面 · V 切换视图（全景 / 3D）
+  // 键盘快捷键: F 标旗 · V 切换视图（全景 / 3D）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
       const k = e.key.toLowerCase();
       if (k === 'f') g.setMode(g.mode === 'open' ? 'flag' : 'open');
-      else if (k === 'r') g.rotate(g.view.h, g.view.v);
       else if (k === 'v') g.setViewMode(g.viewMode === 'all' ? '3d' : 'all');
     };
     window.addEventListener('keydown', onKey);

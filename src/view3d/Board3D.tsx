@@ -1,11 +1,39 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { Orbit, Pause, Play, Rotate3d, RotateCcw } from 'lucide-react';
+import { Boxes, Orbit, Pause, Play, Rotate3d, RotateCcw } from 'lucide-react';
 import { coordOf, neighbors } from '../lib/engine';
 import { AXES } from '../lib/axis';
 import { COLS, ROWS, T_FLAG, T_HIDDEN, T_MINE, T_BOOM, T_WRONG, T_NUM, buildAtlas } from './atlas';
 import type { GameApi } from '../hooks/useGame';
 import spacePano from '../assets/space-panorama.jpg';
+
+// 立方体 8 顶点符号组合（±1,±1,±1）与 12 条边的顶点索引（用于每格 tesseract 远胞线框）
+const CUBE_SIGNS: ReadonlyArray<readonly [number, number, number]> = [
+  [-1, -1, -1],
+  [1, -1, -1],
+  [-1, 1, -1],
+  [1, 1, -1],
+  [-1, -1, 1],
+  [1, -1, 1],
+  [-1, 1, 1],
+  [1, 1, 1],
+];
+const CUBE_EDGES: ReadonlyArray<readonly [number, number]> = [
+  [0, 1],
+  [2, 3],
+  [4, 5],
+  [6, 7],
+  [0, 2],
+  [1, 3],
+  [4, 6],
+  [5, 7],
+  [0, 4],
+  [1, 5],
+  [2, 6],
+  [3, 7],
+];
+// 每格写入的线段顶点数：远胞 12 边(24) + 内外顶点连线 8 条(16)
+const TESS_V_PER_CELL = 40;
 
 /**
  * 3D 超投影视图：
@@ -101,6 +129,7 @@ export default function Board3D({ g }: { g: GameApi }) {
 
   const [drag4d, setDrag4d] = useState(false);
   const [auto, setAuto] = useState(true);
+  const [tess, setTess] = useState(true);
   const [glFail, setGlFail] = useState(false);
   const [tip, setTip] = useState<Tool | null>(null);
   const [ready, setReady] = useState(false);
@@ -109,6 +138,8 @@ export default function Board3D({ g }: { g: GameApi }) {
   autoRef.current = auto;
   const drag4dRef = useRef(drag4d);
   drag4dRef.current = drag4d;
+  const tessRef = useRef(tess);
+  tessRef.current = tess;
   const viewRef = useRef({ theta: 0.6, phi: 1.05, r: 12, xw: -0.35, yw: 0.22 });
   const syncRef = useRef<(() => void) | null>(null);
 
@@ -161,6 +192,21 @@ export default function Board3D({ g }: { g: GameApi }) {
     const mesh = new THREE.InstancedMesh(geo, mat, total);
     mesh.frustumCulled = false;
     scene.add(mesh);
+
+    // 每格 tesseract 投影：远端胞线框（12 边）+ 内外顶点连线（8 条）
+    const tessPos = new Float32Array(total * TESS_V_PER_CELL * 3);
+    const tessGeo = new THREE.BufferGeometry();
+    tessGeo.setAttribute('position', new THREE.BufferAttribute(tessPos, 3));
+    const tessMat = new THREE.LineBasicMaterial({
+      color: 0x22d3ee,
+      transparent: true,
+      opacity: 0.3,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const tessLines = new THREE.LineSegments(tessGeo, tessMat);
+    tessLines.frustumCulled = false;
+    scene.add(tessLines);
 
     // 预计算中心化四维坐标
     const centered = new Float32Array(total * 4);
@@ -381,34 +427,83 @@ export default function Board3D({ g }: { g: GameApi }) {
         // YW 平面旋转
         const y1 = by * cyw - w1 * syw;
         const w2 = by * syw + w1 * cyw;
-        // W 轴透视投影 → 3D
+        // W 轴透视投影 → 3D（存 w2，pr 在第二遍按需重算）
         const pr = w4 / (w4 - w2);
-        const px = x1 * pr;
-        const py = y1 * pr;
-        const pz = bz * pr;
-        proj[k * 4] = px;
-        proj[k * 4 + 1] = py;
-        proj[k * 4 + 2] = pz;
-        proj[k * 4 + 3] = pr;
-        sumX += px;
-        sumY += py;
-        sumZ += pz;
+        proj[k * 4] = x1 * pr;
+        proj[k * 4 + 1] = y1 * pr;
+        proj[k * 4 + 2] = bz * pr;
+        proj[k * 4 + 3] = w2;
+        sumX += x1 * pr;
+        sumY += y1 * pr;
+        sumZ += bz * pr;
       }
       const inv = 1 / total;
       const cx0 = sumX * inv;
       const cy0 = sumY * inv;
       const cz0 = sumZ * inv;
-      // 第二遍：减去质心后写入实例矩阵（棋盘始终居中于相机目标点）
+      // 第二遍：减去质心后写入实例矩阵（棋盘始终居中于相机目标点），
+      // 并为每格写入 tesseract 远胞线框（开启 4D 胞结构时）
+      const showTess = tessRef.current;
       for (let k = 0; k < total; k++) {
-        let s = scaleArr[k] * proj[k * 4 + 3];
+        const w2 = proj[k * 4 + 3];
+        let s = scaleArr[k] * (w4 / (w4 - w2));
         if (k === exp) s *= 1 + 0.16 * Math.sin(t * 7);
         if (k === hover) s *= 1.14;
-        vp.set(proj[k * 4] - cx0, proj[k * 4 + 1] - cy0, proj[k * 4 + 2] - cz0);
+        const px = proj[k * 4] - cx0;
+        const py = proj[k * 4 + 1] - cy0;
+        const pz = proj[k * 4 + 2] - cz0;
+        vp.set(px, py, pz);
         sc.setScalar(s);
         m4.compose(vp, q0, sc);
         mesh.setMatrixAt(k, m4);
+
+        if (showTess) {
+          // 远端胞：沿「格心相对棋盘中心的径向」拖到盒后方，
+          // 大小随该格 W 分量变化 —— 4D 旋转时内核游走缩放
+          const w2n = w2 / w4;
+          let dx = px;
+          let dy = py;
+          let dz = pz;
+          const cl = Math.sqrt(px * px + py * py + pz * pz);
+          if (cl < 1e-4) {
+            dx = 0.6;
+            dy = 0.6;
+            dz = 0.5;
+          } else {
+            dx /= cl;
+            dy /= cl;
+            dz /= cl;
+          }
+          const off = s * 0.68;
+          const ix = px + dx * off;
+          const iy = py + dy * off;
+          const iz = pz + dz * off;
+          const ih = s * 0.15 * (1 - 0.3 * w2n);
+          const oh = s * 0.422;
+          let o = k * TESS_V_PER_CELL * 3;
+          for (let e = 0; e < 12; e++) {
+            const a = CUBE_EDGES[e][0];
+            const b = CUBE_EDGES[e][1];
+            tessPos[o++] = ix + CUBE_SIGNS[a][0] * ih;
+            tessPos[o++] = iy + CUBE_SIGNS[a][1] * ih;
+            tessPos[o++] = iz + CUBE_SIGNS[a][2] * ih;
+            tessPos[o++] = ix + CUBE_SIGNS[b][0] * ih;
+            tessPos[o++] = iy + CUBE_SIGNS[b][1] * ih;
+            tessPos[o++] = iz + CUBE_SIGNS[b][2] * ih;
+          }
+          for (let m = 0; m < 8; m++) {
+            tessPos[o++] = px + CUBE_SIGNS[m][0] * oh;
+            tessPos[o++] = py + CUBE_SIGNS[m][1] * oh;
+            tessPos[o++] = pz + CUBE_SIGNS[m][2] * oh;
+            tessPos[o++] = ix + CUBE_SIGNS[m][0] * ih;
+            tessPos[o++] = iy + CUBE_SIGNS[m][1] * ih;
+            tessPos[o++] = iz + CUBE_SIGNS[m][2] * ih;
+          }
+        }
       }
       mesh.instanceMatrix.needsUpdate = true;
+      tessLines.visible = showTess;
+      if (showTess) (tessGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
 
       const sp = Math.sin(v.phi);
       camera.position.set(v.r * sp * Math.sin(v.theta), v.r * Math.cos(v.phi), v.r * sp * Math.cos(v.theta));
@@ -434,6 +529,8 @@ export default function Board3D({ g }: { g: GameApi }) {
       geo.dispose();
       mat.dispose();
       tex.dispose();
+      tessGeo.dispose();
+      tessMat.dispose();
       renderer.dispose();
       if (el.parentElement === wrap) wrap.removeChild(el);
     };
@@ -482,6 +579,9 @@ export default function Board3D({ g }: { g: GameApi }) {
           </ToolBtn>
           <ToolBtn onClick={() => setAuto((a) => !a)} title={auto ? '暂停自动旋转' : '开启自动旋转'}>
             {auto ? <Pause size={15} /> : <Play size={15} />}
+          </ToolBtn>
+          <ToolBtn active={tess} onClick={() => setTess((x) => !x)} title="4D 胞结构：每格显示超立方体远端胞投影">
+            <Boxes size={15} />
           </ToolBtn>
           <ToolBtn
             onClick={() => {

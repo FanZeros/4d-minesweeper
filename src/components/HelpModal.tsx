@@ -64,6 +64,9 @@ export default function HelpModal({ open, onClose }: Props) {
             <span className="font-mono text-cyan-300"> XW / YW </span>
             平面内做真正的四维旋转——方块会「滚进」超空间又从另一侧「滚出」。
             左键揭开、右键标旗、滚轮缩放，悬停同样会透视整个 4D 邻域。
+            每个立方体背后都拖着它的
+            <span className="font-mono text-cyan-300"> 远端胞 </span>
+            发光线框——那是这个格子沿 W 轴的另一半超立方体投影（工具条可开关）。
           </Section>
 
           <Section icon={<RotateCw size={15} />} title="视角旋转 · 90° 超平面旋转">

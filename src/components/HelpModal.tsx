@@ -1,4 +1,4 @@
-import { X, Box, Boxes, LayoutGrid, Focus, RotateCw, Flag, MousePointerClick, Lightbulb } from 'lucide-react';
+import { X, Box, Boxes, LayoutGrid, RotateCw, Flag, MousePointerClick, Lightbulb } from 'lucide-react';
 
 interface Props {
   open: boolean;
@@ -56,11 +56,6 @@ export default function HelpModal({ open, onClose }: Props) {
           <Section icon={<LayoutGrid size={15} />} title="全景视图 · 一次性俯瞰四维空间">
             每个小盘是一个二维切片（水平轴 →，垂直轴 ↓）；外层行列把全部 n² 个切片沿另外两条轴
             (Z · W) 铺成阵列——整个四维空间一览无余。外层青色/紫色角标指示当前轴的映射方向。
-          </Section>
-
-          <Section icon={<Focus size={15} />} title="焦点切片 · 逐层深入">
-            只放大显示一个切片；用下方的导航点在其余两条隐藏维度上平移切片位置，
-            适合精确核对某个区域的雷数。
           </Section>
 
           <Section icon={<Boxes size={15} />} title="3D 超投影 · 环绕四维空间">

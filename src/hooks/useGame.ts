@@ -7,7 +7,7 @@ import {
   type Axis,
   type BoardData,
 } from '../lib/engine';
-import { setSoundEnabled, sfx } from '../lib/audio';
+import { setMusicEnabled, setSoundEnabled, sfx } from '../lib/audio';
 
 export interface Difficulty {
   id: string;
@@ -32,7 +32,7 @@ export interface ViewState {
 }
 
 export type PlayMode = 'open' | 'flag';
-export type ViewMode = 'all' | 'slice' | '3d';
+export type ViewMode = 'all' | '3d';
 
 function loadJSON<T>(key: string, fallback: T): T {
   try {
@@ -53,6 +53,7 @@ export function useGame() {
   const [hoverPreview, setHoverPreview] = useState(true);
   const [view, setView] = useState<ViewState>({ h: 0, v: 1, pos: [0, 0, 0, 0] });
   const [sound, setSound] = useState<boolean>(() => loadJSON('hm4-sound', true));
+  const [music, setMusic] = useState<boolean>(() => loadJSON('hm4-music', true));
   const [best, setBest] = useState<Record<string, number>>(() => loadJSON('hm4-best', {}));
   const [record, setRecord] = useState(false);
   const timeRef = useRef(0);
@@ -69,6 +70,15 @@ export function useGame() {
       /* ignore */
     }
   }, [sound]);
+
+  useEffect(() => {
+    setMusicEnabled(music);
+    try {
+      localStorage.setItem('hm4-music', music ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }, [music]);
 
   useEffect(() => {
     if (!board.started || board.over) return;
@@ -190,22 +200,13 @@ export function useGame() {
     sfx.rotate();
   }, []);
 
-  const setPos = useCallback((axis: Axis, val: number) => {
-    const n = boardRef.current.n;
-    setView((prev) => {
-      if (axis === prev.h || axis === prev.v) return prev;
-      const pos = prev.pos.slice();
-      pos[axis] = Math.max(0, Math.min(n - 1, val));
-      return { ...prev, pos };
-    });
-  }, []);
-
   const setMode = useCallback((m: PlayMode) => {
     setModeState(m);
     sfx.ui();
   }, []);
 
   const toggleSound = useCallback(() => setSound((s) => !s), []);
+  const toggleMusic = useCallback(() => setMusic((m) => !m), []);
 
   return {
     board,
@@ -219,13 +220,14 @@ export function useGame() {
     view,
     setAxis,
     rotate,
-    setPos,
     viewMode,
     setViewMode,
     hoverPreview,
     setHoverPreview,
     sound,
     toggleSound,
+    music,
+    toggleMusic,
     revealAt,
     flagAt,
     chordAt,

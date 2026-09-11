@@ -92,3 +92,49 @@ export const sfx = {
     blip(880, 0.03, 'sine', 0.035);
   },
 };
+
+// ---- BGM 循环播放 ----
+
+let bgm: HTMLAudioElement | null = null;
+let musicOn = false;
+
+function getBgm(): HTMLAudioElement | null {
+  try {
+    if (!bgm) {
+      bgm = new Audio('./bgm.ogg');
+      bgm.loop = true;
+      bgm.volume = 0.3;
+    }
+    return bgm;
+  } catch {
+    return null;
+  }
+}
+
+function tryPlayBgm() {
+  if (!musicOn) return;
+  const a = getBgm();
+  if (!a) return;
+  const p = a.play();
+  if (p && typeof p.catch === 'function') {
+    // 浏览器自动播放策略拦截时，等首次用户交互后再启动
+    p.catch(() => {
+      window.addEventListener(
+        'pointerdown',
+        () => {
+          if (musicOn) void a.play().catch(() => {});
+        },
+        { once: true },
+      );
+    });
+  }
+}
+
+export function setMusicEnabled(v: boolean) {
+  musicOn = v;
+  if (!v) {
+    bgm?.pause();
+    return;
+  }
+  tryPlayBgm();
+}

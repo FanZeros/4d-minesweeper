@@ -3,6 +3,7 @@ import {
   Bomb,
   Flag,
   Info,
+  Music,
   PieChart,
   RefreshCw,
   Timer,
@@ -12,10 +13,9 @@ import {
 } from 'lucide-react';
 import { useGame, type GameApi } from './hooks/useGame';
 import { coordOf } from './lib/engine';
-import { fmtTime, hiddenAxes } from './lib/axis';
+import { fmtTime } from './lib/axis';
 import Tesseract from './components/Tesseract';
 import AllSlicesBoard from './components/AllSlicesBoard';
-import SliceBoard from './components/SliceBoard';
 import Board3D from './view3d/Board3D';
 import ControlPanel from './components/ControlPanel';
 import HelpModal from './components/HelpModal';
@@ -129,7 +129,7 @@ export default function App() {
     }
   };
 
-  // 键盘快捷键: F 标旗 · R 旋转当前显示平面 · V 切换视图
+  // 键盘快捷键: F 标旗 · R 旋转当前显示平面 · V 切换视图（全景 / 3D）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
@@ -137,15 +137,7 @@ export default function App() {
       const k = e.key.toLowerCase();
       if (k === 'f') g.setMode(g.mode === 'open' ? 'flag' : 'open');
       else if (k === 'r') g.rotate(g.view.h, g.view.v);
-      else if (k === 'v') g.setViewMode(g.viewMode === 'all' ? 'slice' : 'all');
-      else if (k.startsWith('arrow') && g.viewMode === 'slice') {
-        e.preventDefault();
-        const [oh, ov] = hiddenAxes(g.view.h, g.view.v);
-        if (k === 'arrowleft') g.setPos(oh, g.view.pos[oh] - 1);
-        else if (k === 'arrowright') g.setPos(oh, g.view.pos[oh] + 1);
-        else if (k === 'arrowup') g.setPos(ov, g.view.pos[ov] - 1);
-        else if (k === 'arrowdown') g.setPos(ov, g.view.pos[ov] + 1);
-      }
+      else if (k === 'v') g.setViewMode(g.viewMode === 'all' ? '3d' : 'all');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -181,6 +173,15 @@ export default function App() {
         </div>
         <div className="grow" />
         <button
+          onClick={g.toggleMusic}
+          className={`rounded-lg border border-white/10 bg-white/[0.04] p-2 text-slate-400 transition hover:bg-white/10 hover:text-slate-100 ${
+            g.music ? 'text-cyan-300/90' : 'opacity-50'
+          }`}
+          title={g.music ? '关闭音乐' : '开启音乐'}
+        >
+          <Music size={16} />
+        </button>
+        <button
           onClick={g.toggleSound}
           className="rounded-lg border border-white/10 bg-white/[0.04] p-2 text-slate-400 transition hover:bg-white/10 hover:text-slate-100"
           title={g.sound ? '静音' : '开启音效'}
@@ -207,7 +208,7 @@ export default function App() {
               </div>
             ) : (
               <div key={viewKey} className="view-swap">
-                {g.viewMode === 'all' ? <AllSlicesBoard g={g} /> : <SliceBoard g={g} />}
+                <AllSlicesBoard g={g} />
               </div>
             )}
             {b.over && <EndOverlay g={g} />}

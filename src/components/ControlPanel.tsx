@@ -1,7 +1,6 @@
 import {
   Boxes,
   Flag,
-  Focus,
   LayoutGrid,
   Layers,
   MousePointerClick,
@@ -112,20 +111,13 @@ export default function ControlPanel({ g }: { g: GameApi }) {
       {/* 视图模式 */}
       <section className="panel p-4">
         <SectionTitle icon={<LayoutGrid size={13} />} text="视图 · 降维观察" />
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           <ModeButton
             active={g.viewMode === 'all'}
             onClick={() => g.setViewMode('all')}
             icon={<LayoutGrid size={13} />}
             label="全景视图"
             sub="n² 个切片"
-          />
-          <ModeButton
-            active={g.viewMode === 'slice'}
-            onClick={() => g.setViewMode('slice')}
-            icon={<Focus size={13} />}
-            label="焦点切片"
-            sub="单层放大"
           />
           <ModeButton
             active={g.viewMode === '3d'}

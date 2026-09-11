@@ -148,7 +148,9 @@ export default function Board3D({ g }: { g: GameApi }) {
     // 图集按 sRGB 设计值直通采样：不做硬件 sRGB 解码（线性化后自写 shader 无输出补偿，整体会偏暗）
     tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
 
-    const geo = new THREE.BoxGeometry(0.46, 0.46, 0.46);
+    // 格子占满 4D 单位超立方体。投影后相邻格中心距 = pr，盒边长也乘 pr，
+    // XYZ 邻面就会贴合，不会被拆成「小球 + 连线」。
+    const geo = new THREE.BoxGeometry(0.98, 0.98, 0.98);
     const tileAttr = new THREE.InstancedBufferAttribute(new Float32Array(total), 1);
     const hotAttr = new THREE.InstancedBufferAttribute(new Float32Array(total), 1);
     tileAttr.setUsage(THREE.DynamicDrawUsage);
@@ -219,13 +221,10 @@ export default function Board3D({ g }: { g: GameApi }) {
         let s = 1;
         if (st === 2) {
           tile = b.over && !b.mines[k] ? T_WRONG : T_FLAG;
-          s = 1;
         } else if (st === 1 && b.mines[k]) {
           tile = b.exploded === k ? T_BOOM : T_MINE;
-          s = 0.78;
         } else if (st === 1) {
           tile = b.counts[k] === 0 ? 1 : T_NUM(b.counts[k]);
-          s = b.counts[k] === 0 ? 0.5 : 0.8;
         }
         tArr[k] = tile;
         scaleArr[k] = s;
@@ -438,7 +437,7 @@ export default function Board3D({ g }: { g: GameApi }) {
         const w2 = proj[k * 4 + 3];
         let s = scaleArr[k] * (w4 / (w4 - w2));
         if (k === exp) s *= 1 + 0.16 * Math.sin(t * 7);
-        if (k === hover) s *= 1.14;
+        if (k === hover) s *= 1.03;
         const px = proj[k * 4] - cx0;
         const py = proj[k * 4 + 1] - cy0;
         const pz = proj[k * 4 + 2] - cz0;

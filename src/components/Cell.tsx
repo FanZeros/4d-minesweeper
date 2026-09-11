@@ -28,7 +28,11 @@ function CellInner(p: CellProps) {
   const cls = ['cell'];
   cls.push(open ? 'cell-open' : 'cell-closed');
   if (flag) cls.push('cell-flag');
-  if (p.hot && !open && !flag) cls.push('cell-hot');
+  if (p.hot) {
+    // 邻域高亮分级：隐藏格/旗格强高亮（核对数旗不遗漏），已开格微微高亮（保持数字可读）
+    if (!open) cls.push('cell-hot');
+    else cls.push('cell-hot-soft');
+  }
   if (p.self && !open && !flag) cls.push('cell-self');
   if (p.exploded) cls.push('cell-exploded');
   if (wrong) cls.push('cell-wrong');

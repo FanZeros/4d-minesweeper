@@ -227,8 +227,10 @@ export default function Board3D({ g }: { g: GameApi }) {
       hover = i;
       if (i >= 0 && gameRef.current.hoverPreview) {
         arr[i] = 1;
+        const st = gameRef.current.board.state;
         const list = neigh[i];
-        for (let j = 0; j < list.length; j++) arr[list[j]] = 0.55;
+        // 邻居高亮分级：隐藏格/旗格强高亮，已开数字格微微高亮
+        for (let j = 0; j < list.length; j++) arr[list[j]] = st[list[j]] === 1 ? 0.22 : 0.55;
       }
       hotAttr.needsUpdate = true;
       setTip(i >= 0 ? { x: lastPtr.x, y: lastPtr.y, i } : null);

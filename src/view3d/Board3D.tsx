@@ -182,7 +182,7 @@ export default function Board3D({ g }: { g: GameApi }) {
     // 图集按 sRGB 设计值直通采样：不做硬件 sRGB 解码（线性化后自写 shader 无输出补偿，整体会偏暗）
     tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
 
-    const geo = new THREE.BoxGeometry(0.82, 0.82, 0.82);
+    const geo = new THREE.BoxGeometry(0.96, 0.96, 0.96);
     const tileAttr = new THREE.InstancedBufferAttribute(new Float32Array(total), 1);
     const hotAttr = new THREE.InstancedBufferAttribute(new Float32Array(total), 1);
     tileAttr.setUsage(THREE.DynamicDrawUsage);
@@ -227,6 +227,62 @@ export default function Board3D({ g }: { g: GameApi }) {
     const linkLines = new THREE.LineSegments(linkGeo, linkMat);
     linkLines.frustumCulled = false;
     scene.add(linkLines);
+
+    // 整体棱线网格：所有盒子的外棱在 4D 空间去重（相邻盒子共享的棱只画一次），
+    // 让格子连接成一个连续的大立方体网格（整体大 tesseract 的外壳）
+    const halfOff = (n - 1) / 2;
+    const seenEdges = new Set<string>();
+    const edgeQs: number[] = [];
+    const edgeLess = (p: number[], q: number[]) => {
+      for (let i = 0; i < 4; i++) {
+        if (p[i] !== q[i]) return p[i] < q[i];
+      }
+      return false;
+    };
+    for (let k = 0; k < total; k++) {
+      const c = coordOf(n, k);
+      for (let e = 0; e < 12; e++) {
+        const a = CUBE_EDGES[e][0];
+        const b = CUBE_EDGES[e][1];
+        const sa = CUBE_SIGNS[a];
+        const sb = CUBE_SIGNS[b];
+        if (!sa || !sb) continue;
+        // 棱端点编码（×2 域）：XYZ = 2c + sign（奇偶区分 ±0.48）；
+        // W = 2c 固定层中心（3D 盒在 w 方向无厚度，同层棱的 w 相同）
+        const qa = [
+          2 * c[0] + (sa[0] > 0 ? 1 : 0),
+          2 * c[1] + (sa[1] > 0 ? 1 : 0),
+          2 * c[2] + (sa[2] > 0 ? 1 : 0),
+          2 * c[3],
+        ];
+        const qb = [
+          2 * c[0] + (sb[0] > 0 ? 1 : 0),
+          2 * c[1] + (sb[1] > 0 ? 1 : 0),
+          2 * c[2] + (sb[2] > 0 ? 1 : 0),
+          2 * c[3],
+        ];
+        // 无向边规范化：小端点在前，字符串编码去重
+        const key = (edgeLess(qa, qb) ? [...qa, ...qb] : [...qb, ...qa]).join(',');
+        if (seenEdges.has(key)) continue;
+        seenEdges.add(key);
+        edgeQs.push(qa[0], qa[1], qa[2], qa[3], qb[0], qb[1], qb[2], qb[3]);
+      }
+    }
+    const edgeQ = new Int32Array(edgeQs);
+    const edgeCount = edgeQs.length / 8;
+    const edgePos = new Float32Array(edgeCount * 6);
+    const edgeGeo = new THREE.BufferGeometry();
+    edgeGeo.setAttribute('position', new THREE.BufferAttribute(edgePos, 3));
+    const edgeMat = new THREE.LineBasicMaterial({
+      color: 0x22d3ee,
+      transparent: true,
+      opacity: 0.4,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const edgeLines = new THREE.LineSegments(edgeGeo, edgeMat);
+    edgeLines.frustumCulled = false;
+    scene.add(edgeLines);
 
     // 预计算中心化四维坐标
     const centered = new Float32Array(total * 4);
@@ -485,7 +541,7 @@ export default function Board3D({ g }: { g: GameApi }) {
           sc.setScalar(ch / 0.5); // coreGeo 尺寸 1，half = 0.5
           m4.compose(vp, q0, sc);
           coreMesh.setMatrixAt(k, m4);
-          const oh = s * 0.415; // 外盒角（略内收于 0.41*1.02，贴合玻璃面）
+          const oh = s * 0.485; // 外盒角（0.48*1.01，贴合玻璃棱）
           const oh2 = ch * 1.02; // 核心角（微外扩防 z-fighting）
           let o = k * TESS_V_PER_CELL * 3;
           // 核心胞 12 条边
@@ -514,7 +570,31 @@ export default function Board3D({ g }: { g: GameApi }) {
       coreMesh.visible = showTess;
       if (showTess) coreMesh.instanceMatrix.needsUpdate = true;
       linkLines.visible = showTess;
-      if (showTess) (linkGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+      edgeLines.visible = showTess;
+      if (showTess) {
+        (linkGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+        // 整体棱线网格投影（与格子同一 4D 旋转/透视/质心，端点 ±0.48 贴合玻璃棱）
+        let src = 0;
+        let dst = 0;
+        for (let ei = 0; ei < edgeCount; ei++) {
+          for (let v = 0; v < 2; v++) {
+            const X = (edgeQ[src] >> 1) - halfOff + (edgeQ[src] & 1 ? 0.48 : -0.48);
+            const Y = (edgeQ[src + 1] >> 1) - halfOff + (edgeQ[src + 1] & 1 ? 0.48 : -0.48);
+            const Z = (edgeQ[src + 2] >> 1) - halfOff + (edgeQ[src + 2] & 1 ? 0.48 : -0.48);
+            const W = (edgeQ[src + 3] >> 1) - halfOff; // w 层中心（无 ±0.48）
+            src += 4;
+            const x1 = X * cxw - W * sxw;
+            const w1 = X * sxw + W * cxw;
+            const y1 = Y * cyw - w1 * syw;
+            const w2e = Y * syw + w1 * cyw;
+            const pre = w4 / (w4 - w2e);
+            edgePos[dst++] = x1 * pre - cx0;
+            edgePos[dst++] = y1 * pre - cy0;
+            edgePos[dst++] = Z * pre - cz0;
+          }
+        }
+        (edgeGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+      }
       // 玻璃化：开启胞结构时外盒半透明且不写深度；关闭时恢复完全不透明
       mat.uniforms.uAlpha.value = showTess ? 1.0 : 0.0;
       mat.depthWrite = !showTess;
@@ -547,6 +627,8 @@ export default function Board3D({ g }: { g: GameApi }) {
       coreMat.dispose();
       linkGeo.dispose();
       linkMat.dispose();
+      edgeGeo.dispose();
+      edgeMat.dispose();
       renderer.dispose();
       if (el.parentElement === wrap) wrap.removeChild(el);
     };

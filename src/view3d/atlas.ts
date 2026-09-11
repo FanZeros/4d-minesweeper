@@ -33,22 +33,22 @@ export function buildAtlas(): HTMLCanvasElement {
 
   const hiddenBg = (s: number) => {
     const g1 = ctx.createLinearGradient(0, 0, s, s);
-    g1.addColorStop(0, '#222b52');
-    g1.addColorStop(0.5, '#1a2144');
-    g1.addColorStop(1, '#121833');
+    g1.addColorStop(0, '#37447f');
+    g1.addColorStop(0.5, '#2a3368');
+    g1.addColorStop(1, '#1e2755');
     ctx.fillStyle = g1;
     ctx.fillRect(0, 0, s, s);
-    ctx.strokeStyle = 'rgba(148,163,184,0.3)';
+    ctx.strokeStyle = 'rgba(148,163,184,0.38)';
     ctx.lineWidth = 3;
     ctx.strokeRect(2, 2, s - 4, s - 4);
-    ctx.fillStyle = 'rgba(255,255,255,0.07)';
+    ctx.fillStyle = 'rgba(255,255,255,0.1)';
     ctx.fillRect(5, 5, s - 10, 5);
   };
 
   const openBg = (s: number) => {
-    ctx.fillStyle = '#0a0e20';
+    ctx.fillStyle = '#141d3f';
     ctx.fillRect(0, 0, s, s);
-    ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)';
     ctx.lineWidth = 6;
     ctx.strokeRect(3, 3, s - 6, s - 6);
   };

@@ -5,6 +5,7 @@ import { coordOf, neighbors } from '../lib/engine';
 import { AXES } from '../lib/axis';
 import { COLS, ROWS, T_FLAG, T_HIDDEN, T_MINE, T_BOOM, T_WRONG, T_NUM, buildAtlas } from './atlas';
 import type { GameApi } from '../hooks/useGame';
+import spacePano from '../assets/space-panorama.jpg';
 
 /**
  * 3D 超投影视图：
@@ -52,9 +53,9 @@ void main() {
   vec3 N = normalize(vN);
   vec3 L = normalize(vec3(0.45, 0.85, 0.55));
   float d = max(dot(N, L), 0.0);
-  // 反向补光：背光/底面不再死黑，整体提亮
+  // 反向补光：背光/底面不再死黑；基准亮度 0.80 保证整体明亮
   float fill = max(dot(N, normalize(vec3(-0.55, -0.25, -0.6))), 0.0);
-  vec3 c = tex.rgb * (0.68 + 0.42 * d + 0.30 * fill);
+  vec3 c = tex.rgb * (0.80 + 0.30 * d + 0.36 * fill);
   c = mix(c, vec3(0.14, 0.83, 0.93), vHot * 0.5);
   c += vec3(0.05, 0.45, 0.55) * vHot * vHot * 0.4;
   gl_FragColor = vec4(c, 1.0);
@@ -133,6 +134,11 @@ export default function Board3D({ g }: { g: GameApi }) {
     const el = renderer.domElement;
 
     const scene = new THREE.Scene();
+    // 宇宙星空天空盒（equirect 全景）
+    const bgTex = new THREE.TextureLoader().load(spacePano);
+    bgTex.mapping = THREE.EquirectangularReflectionMapping;
+    bgTex.colorSpace = THREE.SRGBColorSpace;
+    scene.background = bgTex;
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
 
     const tex = new THREE.CanvasTexture(buildAtlas());

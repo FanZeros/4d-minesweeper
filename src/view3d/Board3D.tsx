@@ -1,66 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { Boxes, Orbit, Pause, Play, Rotate3d, RotateCcw } from 'lucide-react';
-import { coordOf, indexOf, neighbors } from '../lib/engine';
+import { Orbit, Pause, Play, Rotate3d, RotateCcw } from 'lucide-react';
+import { coordOf, neighbors } from '../lib/engine';
 import { AXES } from '../lib/axis';
-import { COLS, ROWS, T_FLAG, T_HIDDEN, T_MINE, T_BOOM, T_WRONG, T_NUM, buildAtlas } from './atlas';
+import { T_HIDDEN, T_FLAG, T_MINE, T_BOOM, T_WRONG, T_NUM, buildAtlas, COLS, ROWS } from './atlas';
 import { buildStarfield } from './sky';
+import { TESS_EDGES, TESS_SIGNS } from './tess';
 import type { GameApi } from '../hooks/useGame';
 
 /**
  * 3D 超投影视图：
- * 整个 n⁴ 四维棋盘在 XW / YW 平面中旋转后，沿 W 轴透视投影到三维。
- * 格子是晶格内部的实体；开启 4D 结构时，叠加一条含 W 棱的超立方晶格。
+ * 每个格子是一颗超立方体线框（16 顶点 / 32 边），与左上角 Logo 同构。
+ * 整盘在 XW / YW 平面旋转后沿 W 轴透视投影到三维；数字用始终朝向相机的标签。
  */
-
-const VERT = `
-varying vec2 vUv;
-varying vec3 vN;
-varying float vTile;
-varying float vHot;
-attribute float aTile;
-attribute float aHot;
-void main() {
-  vUv = uv;
-  vN = normal;
-  vTile = aTile;
-  vHot = aHot;
-  vec4 p = instanceMatrix * vec4(position, 1.0);
-  gl_Position = projectionMatrix * modelViewMatrix * p;
-}
-`;
-
-const FRAG = `
-uniform sampler2D uAtlas;
-uniform float uCols;
-uniform float uRows;
-varying vec2 vUv;
-varying vec3 vN;
-varying float vTile;
-varying float vHot;
-void main() {
-  float t = floor(vTile + 0.5);
-  float col = mod(t, uCols);
-  float row = floor(t / uCols);
-  // 让数字在背/左/底面也可读（不做镜像）
-  float flipU = 0.0;
-  if (abs(vN.x) > 0.5) flipU = step(vN.x, 0.0);
-  else if (abs(vN.z) > 0.5) flipU = step(vN.z, 0.0);
-  else flipU = step(vN.y, 0.0);
-  float uu = mix(vUv.x, 1.0 - vUv.x, flipU);
-  vec2 tuv = vec2(col + 0.03 + uu * 0.94, (uRows - 1.0 - row) + 0.03 + vUv.y * 0.94);
-  vec4 tex = texture2D(uAtlas, tuv / vec2(uCols, uRows));
-  vec3 N = normalize(vN);
-  vec3 L = normalize(vec3(0.45, 0.85, 0.55));
-  float d = max(dot(N, L), 0.0);
-  // 反向补光：背光/底面不再死黑；基准亮度 0.80 保证整体明亮
-  float fill = max(dot(N, normalize(vec3(-0.55, -0.25, -0.6))), 0.0);
-  vec3 c = tex.rgb * (0.80 + 0.30 * d + 0.36 * fill);
-  c = mix(c, vec3(0.14, 0.83, 0.93), vHot * 0.5);
-  c += vec3(0.05, 0.45, 0.55) * vHot * vHot * 0.4;
-  gl_FragColor = vec4(c, 1.0);
-}
-`;
 
 interface Tool {
   x: number;
@@ -101,7 +53,6 @@ export default function Board3D({ g }: { g: GameApi }) {
 
   const [drag4d, setDrag4d] = useState(false);
   const [auto, setAuto] = useState(true);
-  const [tess, setTess] = useState(true);
   const [glFail, setGlFail] = useState(false);
   const [tip, setTip] = useState<Tool | null>(null);
   const [ready, setReady] = useState(false);
@@ -110,14 +61,11 @@ export default function Board3D({ g }: { g: GameApi }) {
   autoRef.current = auto;
   const drag4dRef = useRef(drag4d);
   drag4dRef.current = drag4d;
-  const tessRef = useRef(tess);
-  tessRef.current = tess;
   const viewRef = useRef({ theta: 0.6, phi: 1.05, r: 12, xw: -0.35, yw: 0.22 });
   const syncRef = useRef<(() => void) | null>(null);
 
   const n = g.board.n;
 
-  // 场景主体（按棋盘维度重建一次）
   useEffect(() => {
     const wrap = wrapRef.current;
     if (!wrap) return;
@@ -142,72 +90,87 @@ export default function Board3D({ g }: { g: GameApi }) {
     scene.background = bgTex;
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
 
-    const tex = new THREE.CanvasTexture(buildAtlas());
-    // 图集按 sRGB 设计值直通采样：不做硬件 sRGB 解码（线性化后自写 shader 无输出补偿，整体会偏暗）
-    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    const atlas = new THREE.CanvasTexture(buildAtlas());
+    atlas.anisotropy = renderer.capabilities.getMaxAnisotropy();
 
-    // 格子占满 4D 单位超立方体。投影后相邻格中心距 = pr，盒边长也乘 pr，
-    // XYZ 邻面就会贴合，不会被拆成「小球 + 连线」。
-    const geo = new THREE.BoxGeometry(0.98, 0.98, 0.98);
-    const tileAttr = new THREE.InstancedBufferAttribute(new Float32Array(total), 1);
-    const hotAttr = new THREE.InstancedBufferAttribute(new Float32Array(total), 1);
-    tileAttr.setUsage(THREE.DynamicDrawUsage);
-    hotAttr.setUsage(THREE.DynamicDrawUsage);
-    geo.setAttribute('aTile', tileAttr);
-    geo.setAttribute('aHot', hotAttr);
+    const pickGeo = new THREE.SphereGeometry(0.42, 10, 8);
+    const pickMat = new THREE.MeshBasicMaterial({ visible: false });
+    const pickMesh = new THREE.InstancedMesh(pickGeo, pickMat, total);
+    pickMesh.frustumCulled = false;
+    scene.add(pickMesh);
 
-    const mat = new THREE.ShaderMaterial({
-      vertexShader: VERT,
-      fragmentShader: FRAG,
-      uniforms: { uAtlas: { value: tex }, uCols: { value: COLS }, uRows: { value: ROWS } },
-    });
-    const mesh = new THREE.InstancedMesh(geo, mat, total);
-    mesh.frustumCulled = false;
-    scene.add(mesh);
-
-    // 真实 4D 超立方晶格：格子中心沿 ±X/±Y/±Z/±W 各连一条棱。
-    // 无向边去重后，相邻格子共享同一条 4D 棱；W 棱会在投影后变成「里外层」连线。
-    const seenEdges = new Set<string>();
-    const edgeEnds: number[] = [];
-    const addUndirected = (a: number, b: number) => {
-      const lo = a < b ? a : b;
-      const hi = a < b ? b : a;
-      const key = `${lo},${hi}`;
-      if (seenEdges.has(key)) return;
-      seenEdges.add(key);
-      edgeEnds.push(lo, hi);
-    };
-    for (let k = 0; k < total; k++) {
-      const c = coordOf(n, k);
-      if (c[0] + 1 < n) addUndirected(k, indexOf(n, [c[0] + 1, c[1], c[2], c[3]]));
-      if (c[1] + 1 < n) addUndirected(k, indexOf(n, [c[0], c[1] + 1, c[2], c[3]]));
-      if (c[2] + 1 < n) addUndirected(k, indexOf(n, [c[0], c[1], c[2] + 1, c[3]]));
-      if (c[3] + 1 < n) addUndirected(k, indexOf(n, [c[0], c[1], c[2], c[3] + 1]));
-    }
-    const edgeCount = edgeEnds.length / 2;
-    const edgePos = new Float32Array(edgeCount * 6);
-    const edgeGeo = new THREE.BufferGeometry();
-    edgeGeo.setAttribute('position', new THREE.BufferAttribute(edgePos, 3));
-    const edgeMat = new THREE.LineBasicMaterial({
-      color: 0x22d3ee,
+    const xyzPos = new Float32Array(total * 24 * 6);
+    const wPos = new Float32Array(total * 8 * 6);
+    const xyzCol = new Float32Array(total * 24 * 6);
+    const wCol = new Float32Array(total * 8 * 6);
+    const xyzGeo = new THREE.BufferGeometry();
+    const wGeo = new THREE.BufferGeometry();
+    xyzGeo.setAttribute('position', new THREE.BufferAttribute(xyzPos, 3));
+    xyzGeo.setAttribute('color', new THREE.BufferAttribute(xyzCol, 3));
+    wGeo.setAttribute('position', new THREE.BufferAttribute(wPos, 3));
+    wGeo.setAttribute('color', new THREE.BufferAttribute(wCol, 3));
+    const lineOpts = {
+      vertexColors: true,
       transparent: true,
-      opacity: 0.55,
-      blending: THREE.AdditiveBlending,
       depthWrite: false,
-    });
-    const edgeLines = new THREE.LineSegments(edgeGeo, edgeMat);
-    edgeLines.frustumCulled = false;
-    scene.add(edgeLines);
+    };
+    const xyzMat = new THREE.LineBasicMaterial(lineOpts);
+    const wMat = new THREE.LineBasicMaterial(lineOpts);
+    const xyzLines = new THREE.LineSegments(xyzGeo, xyzMat);
+    const wLines = new THREE.LineSegments(wGeo, wMat);
+    xyzLines.frustumCulled = false;
+    wLines.frustumCulled = false;
+    scene.add(xyzLines, wLines);
 
-    // 预计算中心化四维坐标
+    const spriteGeo = new THREE.PlaneGeometry(0.52, 0.52);
+    const spriteMat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      uniforms: { uAtlas: { value: atlas }, uCols: { value: COLS }, uRows: { value: ROWS } },
+      vertexShader: `
+        attribute float aTile;
+        varying float vTile;
+        varying vec2 vUv;
+        void main() {
+          vTile = aTile;
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D uAtlas;
+        uniform float uCols;
+        uniform float uRows;
+        varying float vTile;
+        varying vec2 vUv;
+        void main() {
+          float t = floor(vTile + 0.5);
+          if (t < 0.5) discard;
+          float col = mod(t, uCols);
+          float row = floor(t / uCols);
+          vec2 tuv = vec2(col + 0.06 + vUv.x * 0.88, (uRows - 1.0 - row) + 0.06 + vUv.y * 0.88);
+          vec4 tex = texture2D(uAtlas, tuv / vec2(uCols, uRows));
+          float lum = dot(tex.rgb, vec3(0.30, 0.50, 0.20));
+          if (lum < 0.22) discard;
+          gl_FragColor = vec4(tex.rgb, 1.0);
+        }
+      `,
+    });
+    const tileAttr = new THREE.InstancedBufferAttribute(new Float32Array(total), 1);
+    tileAttr.setUsage(THREE.DynamicDrawUsage);
+    spriteGeo.setAttribute('aTile', tileAttr);
+    const sprites = new THREE.InstancedMesh(spriteGeo, spriteMat, total);
+    sprites.frustumCulled = false;
+    scene.add(sprites);
+
     const centered = new Float32Array(total * 4);
     for (let k = 0; k < total; k++) {
       const c = coordOf(n, k);
       for (let d = 0; d < 4; d++) centered[k * 4 + d] = c[d] - (n - 1) / 2;
     }
     const neigh = neighbors(n);
-    const scaleArr = new Float32Array(total);
-    // 每帧投影缓存: [px, py, pz, pr] × total
+    const hot = new Float32Array(total);
+    const verts = new Float32Array(total * 16 * 3);
     const proj = new Float32Array(total * 4);
 
     const syncTiles = () => {
@@ -215,24 +178,17 @@ export default function Board3D({ g }: { g: GameApi }) {
       const tArr = tileAttr.array as Float32Array;
       for (let k = 0; k < total; k++) {
         const st = b.state[k];
-        let tile = T_HIDDEN;
-        let s = 1;
-        if (st === 2) {
-          tile = b.over && !b.mines[k] ? T_WRONG : T_FLAG;
-        } else if (st === 1 && b.mines[k]) {
-          tile = b.exploded === k ? T_BOOM : T_MINE;
-        } else if (st === 1) {
-          tile = b.counts[k] === 0 ? 1 : T_NUM(b.counts[k]);
-        }
-        tArr[k] = tile;
-        scaleArr[k] = s;
+        let id = T_HIDDEN;
+        if (st === 2) id = b.over && !b.mines[k] ? T_WRONG : T_FLAG;
+        else if (st === 1 && b.mines[k]) id = b.exploded === k ? T_BOOM : T_MINE;
+        else if (st === 1) id = b.counts[k] === 0 ? 1 : T_NUM(b.counts[k]);
+        tArr[k] = id;
       }
       tileAttr.needsUpdate = true;
     };
     syncRef.current = syncTiles;
     syncTiles();
 
-    // —— 视角控制 ——
     viewRef.current = { theta: 0.6, phi: 1.05, r: n * 1.6 + 4.2, xw: -0.35, yw: 0.22 };
     const drag = { on: false, x: 0, y: 0, moved: 0, btn: 0, shift: false };
     const lastPtr = { x: 0, y: 0 };
@@ -245,28 +201,25 @@ export default function Board3D({ g }: { g: GameApi }) {
       const rect = el.getBoundingClientRect();
       ndc.set((lastPtr.x / rect.width) * 2 - 1, -(lastPtr.y / rect.height) * 2 + 1);
       ray.setFromCamera(ndc, camera);
-      const hits = ray.intersectObject(mesh);
+      const hits = ray.intersectObject(pickMesh);
       for (const h of hits) if (h.instanceId != null) return h.instanceId;
       return -1;
     };
 
     const setHover = (i: number) => {
       if (i === hover) return;
-      const arr = hotAttr.array as Float32Array;
       if (hover >= 0) {
-        arr[hover] = 0;
+        hot[hover] = 0;
         const list = neigh[hover];
-        for (let j = 0; j < list.length; j++) arr[list[j]] = 0;
+        for (let j = 0; j < list.length; j++) hot[list[j]] = 0;
       }
       hover = i;
       if (i >= 0 && gameRef.current.hoverPreview) {
-        arr[i] = 1;
+        hot[i] = 1;
         const st = gameRef.current.board.state;
         const list = neigh[i];
-        // 邻居高亮分级：隐藏格/旗格强高亮，已开数字格微微高亮
-        for (let j = 0; j < list.length; j++) arr[list[j]] = st[list[j]] === 1 ? 0.22 : 0.55;
+        for (let j = 0; j < list.length; j++) hot[list[j]] = st[list[j]] === 1 ? 0.28 : 0.72;
       }
-      hotAttr.needsUpdate = true;
       setTip(i >= 0 ? { x: lastPtr.x, y: lastPtr.y, i } : null);
     };
 
@@ -345,12 +298,10 @@ export default function Board3D({ g }: { g: GameApi }) {
     el.addEventListener('wheel', onWheel, { passive: false });
     el.addEventListener('pointerleave', onLeave);
 
-    // —— 自适应尺寸 ——
     const resize = () => {
       const w = wrap.clientWidth;
       const h = wrap.clientHeight;
       if (w === 0 || h === 0) return;
-      // 同步设置 canvas 的 CSS 尺寸，否则高 DPI 屏（DPR≥2）下会溢出容器导致画面不居中
       renderer.setSize(w, h);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
@@ -359,21 +310,20 @@ export default function Board3D({ g }: { g: GameApi }) {
     ro.observe(wrap);
     resize();
 
-    // 字体加载完成后重建图集，让数字用上 JetBrains Mono
     let alive = true;
     document.fonts?.ready.then(() => {
       if (!alive) return;
-      tex.image = buildAtlas();
-      tex.needsUpdate = true;
+      atlas.image = buildAtlas();
+      atlas.needsUpdate = true;
     });
 
-    // —— 渲染循环 ——
     const m4 = new THREE.Matrix4();
-    const q0 = new THREE.Quaternion();
     const vp = new THREE.Vector3();
     const sc = new THREE.Vector3();
+    const qBill = new THREE.Quaternion();
     let raf = 0;
     let t = 0;
+    const halfSize = 0.32;
 
     const frame = () => {
       t += 1 / 60;
@@ -386,11 +336,9 @@ export default function Board3D({ g }: { g: GameApi }) {
       const sxw = Math.sin(v.xw);
       const cyw = Math.cos(v.yw);
       const syw = Math.sin(v.yw);
-      const w4 = n * 1.18;
-      const b = gameRef.current.board;
-      const exp = b.exploded;
+      const w4 = n * 1.35;
+      const exp = gameRef.current.board.exploded;
 
-      // 自动旋转中持续追踪光标下的立方体
       if (autoRef.current && !drag.on && hover >= 0) needHoverRay = true;
       if (needHoverRay) {
         needHoverRay = false;
@@ -398,9 +346,6 @@ export default function Board3D({ g }: { g: GameApi }) {
         if (hover >= 0) setTip({ x: lastPtr.x, y: lastPtr.y, i: hover });
       }
 
-      // 第一遍：W 轴透视投影 + 累积投影质心。
-      // 透视公式 pr = w4/(w4-w2) 对 ±w2 不对称（+W 侧放大更多），
-      // 投影后整体质心会偏离原点，必须减掉质心才能保持画面居中。
       let sumX = 0;
       let sumY = 0;
       let sumZ = 0;
@@ -409,18 +354,15 @@ export default function Board3D({ g }: { g: GameApi }) {
         const by = centered[k * 4 + 1];
         const bz = centered[k * 4 + 2];
         const bw = centered[k * 4 + 3];
-        // XW 平面旋转
         const x1 = bx * cxw - bw * sxw;
         const w1 = bx * sxw + bw * cxw;
-        // YW 平面旋转
         const y1 = by * cyw - w1 * syw;
         const w2 = by * syw + w1 * cyw;
-        // W 轴透视投影 → 3D（存 w2，pr 在第二遍按需重算）
         const pr = w4 / (w4 - w2);
         proj[k * 4] = x1 * pr;
         proj[k * 4 + 1] = y1 * pr;
         proj[k * 4 + 2] = bz * pr;
-        proj[k * 4 + 3] = w2;
+        proj[k * 4 + 3] = pr;
         sumX += x1 * pr;
         sumY += y1 * pr;
         sumZ += bz * pr;
@@ -429,37 +371,97 @@ export default function Board3D({ g }: { g: GameApi }) {
       const cx0 = sumX * inv;
       const cy0 = sumY * inv;
       const cz0 = sumZ * inv;
-      // 第二遍：格子作为晶格内部实体；同时把 4D 邻接棱投影成连续网格
-      const showTess = tessRef.current;
+
+      qBill.copy(camera.quaternion);
+      let ox = 0;
+      let ow = 0;
       for (let k = 0; k < total; k++) {
-        const w2 = proj[k * 4 + 3];
-        let s = scaleArr[k] * (w4 / (w4 - w2));
-        if (k === exp) s *= 1 + 0.16 * Math.sin(t * 7);
-        if (k === hover) s *= 1.03;
+        const bx = centered[k * 4];
+        const by = centered[k * 4 + 1];
+        const bz = centered[k * 4 + 2];
+        const bw = centered[k * 4 + 3];
+        let hs = halfSize;
+        if (k === exp) hs *= 1 + 0.1 * Math.sin(t * 7);
+        if (k === hover) hs *= 1.08;
         const px = proj[k * 4] - cx0;
         const py = proj[k * 4 + 1] - cy0;
         const pz = proj[k * 4 + 2] - cz0;
+        const pr = proj[k * 4 + 3];
         vp.set(px, py, pz);
-        sc.setScalar(s);
-        m4.compose(vp, q0, sc);
-        mesh.setMatrixAt(k, m4);
-      }
-      mesh.instanceMatrix.needsUpdate = true;
-      edgeLines.visible = showTess;
-      if (showTess) {
-        let dst = 0;
-        for (let ei = 0; ei < edgeCount; ei++) {
-          const a = edgeEnds[ei * 2];
-          const b = edgeEnds[ei * 2 + 1];
-          edgePos[dst++] = proj[a * 4] - cx0;
-          edgePos[dst++] = proj[a * 4 + 1] - cy0;
-          edgePos[dst++] = proj[a * 4 + 2] - cz0;
-          edgePos[dst++] = proj[b * 4] - cx0;
-          edgePos[dst++] = proj[b * 4 + 1] - cy0;
-          edgePos[dst++] = proj[b * 4 + 2] - cz0;
+        sc.setScalar(Math.max(0.22, 0.52 * pr));
+        m4.compose(vp, qBill, sc);
+        sprites.setMatrixAt(k, m4);
+        sc.setScalar(0.42 * pr);
+        m4.compose(vp, qBill, sc);
+        pickMesh.setMatrixAt(k, m4);
+
+      const hv = hot[k];
+        const cr = 0.18 + 0.55 * hv;
+        const cg = 0.72 + 0.15 * hv;
+      const cb = 0.86;
+        const wr = 0.86 + 0.1 * hv;
+        const wg = 0.42 + 0.2 * hv;
+        const wb = 0.68;
+
+        for (let vi = 0; vi < 16; vi++) {
+          const sg = TESS_SIGNS[vi];
+          const vx = bx + sg[0] * hs;
+          const vy = by + sg[1] * hs;
+          const vz = bz + sg[2] * hs;
+          const vw = bw + sg[3] * hs;
+          const x1 = vx * cxw - vw * sxw;
+          const w1 = vx * sxw + vw * cxw;
+          const y1 = vy * cyw - w1 * syw;
+          const w2 = vy * syw + w1 * cyw;
+          const spr = w4 / (w4 - w2);
+          verts[k * 48 + vi * 3] = x1 * spr - cx0;
+          verts[k * 48 + vi * 3 + 1] = y1 * spr - cy0;
+          verts[k * 48 + vi * 3 + 2] = vz * spr - cz0;
         }
-        (edgeGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+        for (let ei = 0; ei < TESS_EDGES.length; ei++) {
+          const e = TESS_EDGES[ei];
+          const ax = verts[k * 48 + e.a * 3];
+          const ay = verts[k * 48 + e.a * 3 + 1];
+          const az = verts[k * 48 + e.a * 3 + 2];
+          const bx3 = verts[k * 48 + e.b * 3];
+          const by3 = verts[k * 48 + e.b * 3 + 1];
+          const bz3 = verts[k * 48 + e.b * 3 + 2];
+          if (e.isW) {
+            wPos[ow] = ax;
+            wCol[ow++] = wr;
+            wPos[ow] = ay;
+            wCol[ow++] = wg;
+            wPos[ow] = az;
+            wCol[ow++] = wb;
+            wPos[ow] = bx3;
+            wCol[ow++] = wr;
+            wPos[ow] = by3;
+            wCol[ow++] = wg;
+            wPos[ow] = bz3;
+            wCol[ow++] = wb;
+          } else {
+            xyzPos[ox] = ax;
+            xyzCol[ox++] = cr;
+            xyzPos[ox] = ay;
+            xyzCol[ox++] = cg;
+            xyzPos[ox] = az;
+            xyzCol[ox++] = cb;
+            xyzPos[ox] = bx3;
+            xyzCol[ox++] = cr;
+            xyzPos[ox] = by3;
+            xyzCol[ox++] = cg;
+            xyzPos[ox] = bz3;
+            xyzCol[ox++] = cb;
+          }
+        }
       }
+
+      pickMesh.instanceMatrix.needsUpdate = true;
+      sprites.instanceMatrix.needsUpdate = true;
+      (xyzGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+      (xyzGeo.attributes.color as THREE.BufferAttribute).needsUpdate = true;
+      (wGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+      (wGeo.attributes.color as THREE.BufferAttribute).needsUpdate = true;
 
       const sp = Math.sin(v.phi);
       camera.position.set(v.r * sp * Math.sin(v.theta), v.r * Math.cos(v.phi), v.r * sp * Math.cos(v.theta));
@@ -482,19 +484,22 @@ export default function Board3D({ g }: { g: GameApi }) {
       el.removeEventListener('contextmenu', onCtx);
       el.removeEventListener('wheel', onWheel);
       el.removeEventListener('pointerleave', onLeave);
-      geo.dispose();
-      mat.dispose();
-      tex.dispose();
+      pickGeo.dispose();
+      pickMat.dispose();
+      xyzGeo.dispose();
+      xyzMat.dispose();
+      wGeo.dispose();
+      wMat.dispose();
+      spriteGeo.dispose();
+      spriteMat.dispose();
+      atlas.dispose();
       bgTex.dispose();
-      edgeGeo.dispose();
-      edgeMat.dispose();
       renderer.dispose();
       if (el.parentElement === wrap) wrap.removeChild(el);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [n]);
 
-  // 游戏状态变化 → 重刷立方体纹理
   useEffect(() => {
     syncRef.current?.();
   }, [g.tick]);
@@ -526,7 +531,6 @@ export default function Board3D({ g }: { g: GameApi }) {
         className="relative w-full cursor-grab overflow-hidden rounded-2xl border border-white/[0.07] bg-slate-950/70 shadow-[0_24px_70px_-24px_rgba(0,0,0,0.9)] backdrop-blur active:cursor-grabbing"
         style={{ height: 'min(66vh, 600px)' }}
       >
-        {/* 工具条 */}
         <div className="absolute left-3 top-3 z-10 flex gap-1.5">
           <ToolBtn active={!drag4d} onClick={() => setDrag4d(false)} title="拖拽 = 三维环绕">
             <Orbit size={15} />
@@ -536,9 +540,6 @@ export default function Board3D({ g }: { g: GameApi }) {
           </ToolBtn>
           <ToolBtn onClick={() => setAuto((a) => !a)} title={auto ? '暂停自动旋转' : '开启自动旋转'}>
             {auto ? <Pause size={15} /> : <Play size={15} />}
-          </ToolBtn>
-          <ToolBtn active={tess} onClick={() => setTess((x) => !x)} title="4D 晶格：显示沿 X/Y/Z/W 的真实超立方连接">
-            <Boxes size={15} />
           </ToolBtn>
           <ToolBtn
             onClick={() => {
@@ -550,17 +551,16 @@ export default function Board3D({ g }: { g: GameApi }) {
           </ToolBtn>
         </div>
 
-        {/* 4D 维度图例 */}
         <div className="absolute right-3 top-3 z-10 flex flex-col items-end gap-1 rounded-lg border border-white/[0.07] bg-slate-950/60 px-2.5 py-2 font-mono text-[9px] leading-tight">
           {AXES.map((a) => (
             <span key={a.name} style={{ color: a.color }}>
               {a.name} · {a.cn}
             </span>
           ))}
-          <span className="mt-0.5 text-slate-600">青色线 = 4D 邻接棱</span>
+          <span className="mt-0.5 text-cyan-300/80">青线 XYZ 棱</span>
+          <span className="text-pink-300/80">粉线 W 棱</span>
         </div>
 
-        {/* 悬停提示 */}
         {tipInfo && tip && (
           <div
             className="pointer-events-none absolute z-10 max-w-[220px] rounded-lg border border-cyan-300/25 bg-slate-950/85 px-2.5 py-1.5 font-mono text-[10px] shadow-[0_8px_24px_rgba(0,0,0,0.6)]"

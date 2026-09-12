@@ -59,15 +59,12 @@ export default function HelpModal({ open, onClose }: Props) {
           </Section>
 
           <Section icon={<Boxes size={15} />} title="3D 超投影 · 环绕四维空间">
-            把整张四维棋盘沿 W 轴做透视投影坍缩成三维：每个格子占满自己的单位超立方体，
-            所以 XYZ 相邻面会贴合，不会被拆成一堆散开的小方块。高 W 层的方块更大更近。
+            每个格子是一颗超立方体线框（16 顶点 / 32 边），和左上角 Logo 同构：青色是 XYZ 棱，粉色是 W 棱（连接内外立方体）。
+            整盘沿 W 轴透视投影到三维；数字用始终朝向相机的标签。
             拖拽环绕观察；Shift+拖拽（或点工具条切换到 4D 模式）会让棋盘在
             <span className="font-mono text-cyan-300"> XW / YW </span>
-            平面内做真正的四维旋转——方块会「滚进」超空间又从另一侧「滚出」。
+            平面内做真正的四维旋转——线框会「滚进」超空间又从另一侧「滚出」。
             左键揭开、右键标旗、滚轮缩放，悬停同样会透视整个 4D 邻域。
-            工具条的
-            <span className="font-mono text-cyan-300"> 4D 晶格 </span>
-            额外画出 W 方向的邻接棱（投影后是里外层之间的连线）。
           </Section>
 
           <Section icon={<Lightbulb size={15} />} title="周围雷数提示">

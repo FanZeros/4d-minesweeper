@@ -4,8 +4,8 @@ import { Boxes, Orbit, Pause, Play, Rotate3d, RotateCcw } from 'lucide-react';
 import { coordOf, indexOf, neighbors } from '../lib/engine';
 import { AXES } from '../lib/axis';
 import { COLS, ROWS, T_FLAG, T_HIDDEN, T_MINE, T_BOOM, T_WRONG, T_NUM, buildAtlas } from './atlas';
+import { buildStarfield } from './sky';
 import type { GameApi } from '../hooks/useGame';
-import spacePano from '../assets/space-panorama.jpg';
 
 /**
  * 3D 超投影视图：
@@ -137,10 +137,8 @@ export default function Board3D({ g }: { g: GameApi }) {
     const el = renderer.domElement;
 
     const scene = new THREE.Scene();
-    // 宇宙星空天空盒（equirect 全景）
-    const bgTex = new THREE.TextureLoader().load(spacePano);
+    const bgTex = new THREE.CanvasTexture(buildStarfield());
     bgTex.mapping = THREE.EquirectangularReflectionMapping;
-    bgTex.colorSpace = THREE.SRGBColorSpace;
     scene.background = bgTex;
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
 
@@ -487,6 +485,7 @@ export default function Board3D({ g }: { g: GameApi }) {
       geo.dispose();
       mat.dispose();
       tex.dispose();
+      bgTex.dispose();
       edgeGeo.dispose();
       edgeMat.dispose();
       renderer.dispose();

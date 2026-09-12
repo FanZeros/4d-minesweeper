@@ -53,10 +53,6 @@ export function buildAtlas(): HTMLCanvasElement {
     ctx.strokeRect(3, 3, s - 6, s - 6);
   };
 
-  const clearBg = (s: number) => {
-    ctx.clearRect(0, 0, s, s);
-  };
-
   const drawFlag = (s: number, color = '#fbbf24', pole = '#fde68a') => {
     ctx.save();
     ctx.shadowColor = 'rgba(251,191,36,0.8)';
@@ -115,26 +111,30 @@ export function buildAtlas(): HTMLCanvasElement {
 
   // 0 · 未揭开
   paint(T_HIDDEN, (s) => hiddenBg(s));
-  // 1 · 已开 0（3D 标签用透明底，避免糊成实心方块）
+  // 1 · 已开 0
   paint(T_OPEN0, (s) => {
-    clearBg(s);
+    openBg(s);
+    ctx.fillStyle = 'rgba(148,163,184,0.14)';
+    ctx.beginPath();
+    ctx.arc(s / 2, s / 2, s * 0.045, 0, Math.PI * 2);
+    ctx.fill();
   });
   // 2..81 · 数字
   for (let n = 1; n <= 80; n++) {
     paint(T_NUM(n), (s) => {
-      clearBg(s);
+      openBg(s);
       drawNumber(s, n);
     });
   }
   // 82 · 旗帜
   paint(T_FLAG, (s) => {
-    clearBg(s);
+    hiddenBg(s);
     drawFlag(s);
   });
   // 83 · 地雷
   paint(T_MINE, (s) => {
-    clearBg(s);
-    drawMine(s, '#94a3b8', '#cbd5e1');
+    openBg(s);
+    drawMine(s, '#1e293b', '#64748b');
   });
   // 84 · 爆炸
   paint(T_BOOM, (s) => {

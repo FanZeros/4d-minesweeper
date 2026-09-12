@@ -3,16 +3,62 @@ import * as THREE from 'three';
 import { Orbit, Pause, Play, Rotate3d, RotateCcw } from 'lucide-react';
 import { coordOf, neighbors } from '../lib/engine';
 import { AXES } from '../lib/axis';
-import { T_HIDDEN, T_FLAG, T_MINE, T_BOOM, T_WRONG, T_NUM, buildAtlas, COLS, ROWS } from './atlas';
+import { COLS, ROWS, T_FLAG, T_HIDDEN, T_MINE, T_BOOM, T_WRONG, T_NUM, buildAtlas } from './atlas';
 import { buildStarfield } from './sky';
 import { TESS_EDGES, TESS_SIGNS } from './tess';
 import type { GameApi } from '../hooks/useGame';
 
 /**
  * 3D 超投影视图：
- * 每个格子是一颗超立方体线框（16 顶点 / 32 边），与左上角 Logo 同构。
- * 整盘在 XW / YW 平面旋转后沿 W 轴透视投影到三维；数字用始终朝向相机的标签。
+ * 默认用实体立方体保证数字可读；悬停时把该格展开成超立方体线框（青 XYZ / 粉 W）。
  */
+
+const VERT = `
+varying vec2 vUv;
+varying vec3 vN;
+varying float vTile;
+varying float vHot;
+attribute float aTile;
+attribute float aHot;
+void main() {
+  vUv = uv;
+  vN = normal;
+  vTile = aTile;
+  vHot = aHot;
+  vec4 p = instanceMatrix * vec4(position, 1.0);
+  gl_Position = projectionMatrix * modelViewMatrix * p;
+}
+`;
+
+const FRAG = `
+uniform sampler2D uAtlas;
+uniform float uCols;
+uniform float uRows;
+varying vec2 vUv;
+varying vec3 vN;
+varying float vTile;
+varying float vHot;
+void main() {
+  float t = floor(vTile + 0.5);
+  float col = mod(t, uCols);
+  float row = floor(t / uCols);
+  float flipU = 0.0;
+  if (abs(vN.x) > 0.5) flipU = step(vN.x, 0.0);
+  else if (abs(vN.z) > 0.5) flipU = step(vN.z, 0.0);
+  else flipU = step(vN.y, 0.0);
+  float uu = mix(vUv.x, 1.0 - vUv.x, flipU);
+  vec2 tuv = vec2(col + 0.03 + uu * 0.94, (uRows - 1.0 - row) + 0.03 + vUv.y * 0.94);
+  vec4 tex = texture2D(uAtlas, tuv / vec2(uCols, uRows));
+  vec3 N = normalize(vN);
+  vec3 L = normalize(vec3(0.45, 0.85, 0.55));
+  float d = max(dot(N, L), 0.0);
+  float fill = max(dot(N, normalize(vec3(-0.55, -0.25, -0.6))), 0.0);
+  vec3 c = tex.rgb * (0.80 + 0.30 * d + 0.36 * fill);
+  c = mix(c, vec3(0.14, 0.83, 0.93), vHot * 0.45);
+  c += vec3(0.05, 0.45, 0.55) * vHot * vHot * 0.35;
+  gl_FragColor = vec4(c, 1.0);
+}
+`;
 
 interface Tool {
   x: number;
@@ -90,78 +136,40 @@ export default function Board3D({ g }: { g: GameApi }) {
     scene.background = bgTex;
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
 
-    const atlas = new THREE.CanvasTexture(buildAtlas());
-    atlas.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    const tex = new THREE.CanvasTexture(buildAtlas());
+    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
 
-    const pickGeo = new THREE.SphereGeometry(0.42, 10, 8);
-    const pickMat = new THREE.MeshBasicMaterial({ visible: false });
-    const pickMesh = new THREE.InstancedMesh(pickGeo, pickMat, total);
-    pickMesh.frustumCulled = false;
-    scene.add(pickMesh);
+    const geo = new THREE.BoxGeometry(0.92, 0.92, 0.92);
+    const tileAttr = new THREE.InstancedBufferAttribute(new Float32Array(total), 1);
+    const hotAttr = new THREE.InstancedBufferAttribute(new Float32Array(total), 1);
+    tileAttr.setUsage(THREE.DynamicDrawUsage);
+    hotAttr.setUsage(THREE.DynamicDrawUsage);
+    geo.setAttribute('aTile', tileAttr);
+    geo.setAttribute('aHot', hotAttr);
+    const mat = new THREE.ShaderMaterial({
+      vertexShader: VERT,
+      fragmentShader: FRAG,
+      uniforms: { uAtlas: { value: tex }, uCols: { value: COLS }, uRows: { value: ROWS } },
+    });
+    const mesh = new THREE.InstancedMesh(geo, mat, total);
+    mesh.frustumCulled = false;
+    scene.add(mesh);
 
-    const xyzPos = new Float32Array(total * 24 * 6);
-    const wPos = new Float32Array(total * 8 * 6);
-    const xyzCol = new Float32Array(total * 24 * 6);
-    const wCol = new Float32Array(total * 8 * 6);
+    const xyzPos = new Float32Array(24 * 6);
+    const wPos = new Float32Array(8 * 6);
     const xyzGeo = new THREE.BufferGeometry();
     const wGeo = new THREE.BufferGeometry();
     xyzGeo.setAttribute('position', new THREE.BufferAttribute(xyzPos, 3));
-    xyzGeo.setAttribute('color', new THREE.BufferAttribute(xyzCol, 3));
     wGeo.setAttribute('position', new THREE.BufferAttribute(wPos, 3));
-    wGeo.setAttribute('color', new THREE.BufferAttribute(wCol, 3));
-    const lineOpts = {
-      vertexColors: true,
-      transparent: true,
-      depthWrite: false,
-    };
-    const xyzMat = new THREE.LineBasicMaterial(lineOpts);
-    const wMat = new THREE.LineBasicMaterial(lineOpts);
+    const xyzMat = new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.95 });
+    const wMat = new THREE.LineBasicMaterial({ color: 0xf472b6, transparent: true, opacity: 0.9 });
     const xyzLines = new THREE.LineSegments(xyzGeo, xyzMat);
     const wLines = new THREE.LineSegments(wGeo, wMat);
     xyzLines.frustumCulled = false;
     wLines.frustumCulled = false;
+    xyzLines.visible = false;
+    wLines.visible = false;
     scene.add(xyzLines, wLines);
-
-    const spriteGeo = new THREE.PlaneGeometry(0.52, 0.52);
-    const spriteMat = new THREE.ShaderMaterial({
-      transparent: true,
-      depthWrite: false,
-      uniforms: { uAtlas: { value: atlas }, uCols: { value: COLS }, uRows: { value: ROWS } },
-      vertexShader: `
-        attribute float aTile;
-        varying float vTile;
-        varying vec2 vUv;
-        void main() {
-          vTile = aTile;
-          vUv = uv;
-          gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: `
-        uniform sampler2D uAtlas;
-        uniform float uCols;
-        uniform float uRows;
-        varying float vTile;
-        varying vec2 vUv;
-        void main() {
-          float t = floor(vTile + 0.5);
-          if (t < 0.5) discard;
-          float col = mod(t, uCols);
-          float row = floor(t / uCols);
-          vec2 tuv = vec2(col + 0.06 + vUv.x * 0.88, (uRows - 1.0 - row) + 0.06 + vUv.y * 0.88);
-          vec4 tex = texture2D(uAtlas, tuv / vec2(uCols, uRows));
-          float lum = dot(tex.rgb, vec3(0.30, 0.50, 0.20));
-          if (lum < 0.22) discard;
-          gl_FragColor = vec4(tex.rgb, 1.0);
-        }
-      `,
-    });
-    const tileAttr = new THREE.InstancedBufferAttribute(new Float32Array(total), 1);
-    tileAttr.setUsage(THREE.DynamicDrawUsage);
-    spriteGeo.setAttribute('aTile', tileAttr);
-    const sprites = new THREE.InstancedMesh(spriteGeo, spriteMat, total);
-    sprites.frustumCulled = false;
-    scene.add(sprites);
 
     const centered = new Float32Array(total * 4);
     for (let k = 0; k < total; k++) {
@@ -169,9 +177,8 @@ export default function Board3D({ g }: { g: GameApi }) {
       for (let d = 0; d < 4; d++) centered[k * 4 + d] = c[d] - (n - 1) / 2;
     }
     const neigh = neighbors(n);
-    const hot = new Float32Array(total);
-    const verts = new Float32Array(total * 16 * 3);
     const proj = new Float32Array(total * 4);
+    const verts = new Float32Array(16 * 3);
 
     const syncTiles = () => {
       const b = gameRef.current.board;
@@ -201,25 +208,27 @@ export default function Board3D({ g }: { g: GameApi }) {
       const rect = el.getBoundingClientRect();
       ndc.set((lastPtr.x / rect.width) * 2 - 1, -(lastPtr.y / rect.height) * 2 + 1);
       ray.setFromCamera(ndc, camera);
-      const hits = ray.intersectObject(pickMesh);
+      const hits = ray.intersectObject(mesh);
       for (const h of hits) if (h.instanceId != null) return h.instanceId;
       return -1;
     };
 
     const setHover = (i: number) => {
       if (i === hover) return;
+      const arr = hotAttr.array as Float32Array;
       if (hover >= 0) {
-        hot[hover] = 0;
+        arr[hover] = 0;
         const list = neigh[hover];
-        for (let j = 0; j < list.length; j++) hot[list[j]] = 0;
+        for (let j = 0; j < list.length; j++) arr[list[j]] = 0;
       }
       hover = i;
       if (i >= 0 && gameRef.current.hoverPreview) {
-        hot[i] = 1;
+        arr[i] = 1;
         const st = gameRef.current.board.state;
         const list = neigh[i];
-        for (let j = 0; j < list.length; j++) hot[list[j]] = st[list[j]] === 1 ? 0.28 : 0.72;
+        for (let j = 0; j < list.length; j++) arr[list[j]] = st[list[j]] === 1 ? 0.22 : 0.55;
       }
+      hotAttr.needsUpdate = true;
       setTip(i >= 0 ? { x: lastPtr.x, y: lastPtr.y, i } : null);
     };
 
@@ -313,17 +322,16 @@ export default function Board3D({ g }: { g: GameApi }) {
     let alive = true;
     document.fonts?.ready.then(() => {
       if (!alive) return;
-      atlas.image = buildAtlas();
-      atlas.needsUpdate = true;
+      tex.image = buildAtlas();
+      tex.needsUpdate = true;
     });
 
     const m4 = new THREE.Matrix4();
+    const q0 = new THREE.Quaternion();
     const vp = new THREE.Vector3();
     const sc = new THREE.Vector3();
-    const qBill = new THREE.Quaternion();
     let raf = 0;
     let t = 0;
-    const halfSize = 0.32;
 
     const frame = () => {
       t += 1 / 60;
@@ -336,7 +344,7 @@ export default function Board3D({ g }: { g: GameApi }) {
       const sxw = Math.sin(v.xw);
       const cyw = Math.cos(v.yw);
       const syw = Math.sin(v.yw);
-      const w4 = n * 1.35;
+      const w4 = n * 1.18;
       const exp = gameRef.current.board.exploded;
 
       if (autoRef.current && !drag.on && hover >= 0) needHoverRay = true;
@@ -372,37 +380,24 @@ export default function Board3D({ g }: { g: GameApi }) {
       const cy0 = sumY * inv;
       const cz0 = sumZ * inv;
 
-      qBill.copy(camera.quaternion);
-      let ox = 0;
-      let ow = 0;
       for (let k = 0; k < total; k++) {
+        let s = proj[k * 4 + 3];
+        if (k === exp) s *= 1 + 0.16 * Math.sin(t * 7);
+        if (k === hover) s *= 1.03;
+        vp.set(proj[k * 4] - cx0, proj[k * 4 + 1] - cy0, proj[k * 4 + 2] - cz0);
+        sc.setScalar(s);
+        m4.compose(vp, q0, sc);
+        mesh.setMatrixAt(k, m4);
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+
+      if (hover >= 0) {
+        const k = hover;
         const bx = centered[k * 4];
         const by = centered[k * 4 + 1];
         const bz = centered[k * 4 + 2];
         const bw = centered[k * 4 + 3];
-        let hs = halfSize;
-        if (k === exp) hs *= 1 + 0.1 * Math.sin(t * 7);
-        if (k === hover) hs *= 1.08;
-        const px = proj[k * 4] - cx0;
-        const py = proj[k * 4 + 1] - cy0;
-        const pz = proj[k * 4 + 2] - cz0;
-        const pr = proj[k * 4 + 3];
-        vp.set(px, py, pz);
-        sc.setScalar(Math.max(0.22, 0.52 * pr));
-        m4.compose(vp, qBill, sc);
-        sprites.setMatrixAt(k, m4);
-        sc.setScalar(0.42 * pr);
-        m4.compose(vp, qBill, sc);
-        pickMesh.setMatrixAt(k, m4);
-
-      const hv = hot[k];
-        const cr = 0.18 + 0.55 * hv;
-        const cg = 0.72 + 0.15 * hv;
-      const cb = 0.86;
-        const wr = 0.86 + 0.1 * hv;
-        const wg = 0.42 + 0.2 * hv;
-        const wb = 0.68;
-
+        const hs = 0.48 * proj[k * 4 + 3];
         for (let vi = 0; vi < 16; vi++) {
           const sg = TESS_SIGNS[vi];
           const vx = bx + sg[0] * hs;
@@ -414,54 +409,44 @@ export default function Board3D({ g }: { g: GameApi }) {
           const y1 = vy * cyw - w1 * syw;
           const w2 = vy * syw + w1 * cyw;
           const spr = w4 / (w4 - w2);
-          verts[k * 48 + vi * 3] = x1 * spr - cx0;
-          verts[k * 48 + vi * 3 + 1] = y1 * spr - cy0;
-          verts[k * 48 + vi * 3 + 2] = vz * spr - cz0;
+          verts[vi * 3] = x1 * spr - cx0;
+          verts[vi * 3 + 1] = y1 * spr - cy0;
+          verts[vi * 3 + 2] = vz * spr - cz0;
         }
+        let ox = 0;
+        let ow = 0;
         for (let ei = 0; ei < TESS_EDGES.length; ei++) {
           const e = TESS_EDGES[ei];
-          const ax = verts[k * 48 + e.a * 3];
-          const ay = verts[k * 48 + e.a * 3 + 1];
-          const az = verts[k * 48 + e.a * 3 + 2];
-          const bx3 = verts[k * 48 + e.b * 3];
-          const by3 = verts[k * 48 + e.b * 3 + 1];
-          const bz3 = verts[k * 48 + e.b * 3 + 2];
+          const ax = verts[e.a * 3];
+          const ay = verts[e.a * 3 + 1];
+          const az = verts[e.a * 3 + 2];
+          const bx3 = verts[e.b * 3];
+          const by3 = verts[e.b * 3 + 1];
+          const bz3 = verts[e.b * 3 + 2];
           if (e.isW) {
-            wPos[ow] = ax;
-            wCol[ow++] = wr;
-            wPos[ow] = ay;
-            wCol[ow++] = wg;
-            wPos[ow] = az;
-            wCol[ow++] = wb;
-            wPos[ow] = bx3;
-            wCol[ow++] = wr;
-            wPos[ow] = by3;
-            wCol[ow++] = wg;
-            wPos[ow] = bz3;
-            wCol[ow++] = wb;
+            wPos[ow++] = ax;
+            wPos[ow++] = ay;
+            wPos[ow++] = az;
+            wPos[ow++] = bx3;
+            wPos[ow++] = by3;
+            wPos[ow++] = bz3;
           } else {
-            xyzPos[ox] = ax;
-            xyzCol[ox++] = cr;
-            xyzPos[ox] = ay;
-            xyzCol[ox++] = cg;
-            xyzPos[ox] = az;
-            xyzCol[ox++] = cb;
-            xyzPos[ox] = bx3;
-            xyzCol[ox++] = cr;
-            xyzPos[ox] = by3;
-            xyzCol[ox++] = cg;
-            xyzPos[ox] = bz3;
-            xyzCol[ox++] = cb;
+            xyzPos[ox++] = ax;
+            xyzPos[ox++] = ay;
+            xyzPos[ox++] = az;
+            xyzPos[ox++] = bx3;
+            xyzPos[ox++] = by3;
+            xyzPos[ox++] = bz3;
           }
         }
+        xyzLines.visible = true;
+        wLines.visible = true;
+        (xyzGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+        (wGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+      } else {
+        xyzLines.visible = false;
+        wLines.visible = false;
       }
-
-      pickMesh.instanceMatrix.needsUpdate = true;
-      sprites.instanceMatrix.needsUpdate = true;
-      (xyzGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
-      (xyzGeo.attributes.color as THREE.BufferAttribute).needsUpdate = true;
-      (wGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
-      (wGeo.attributes.color as THREE.BufferAttribute).needsUpdate = true;
 
       const sp = Math.sin(v.phi);
       camera.position.set(v.r * sp * Math.sin(v.theta), v.r * Math.cos(v.phi), v.r * sp * Math.cos(v.theta));
@@ -484,16 +469,14 @@ export default function Board3D({ g }: { g: GameApi }) {
       el.removeEventListener('contextmenu', onCtx);
       el.removeEventListener('wheel', onWheel);
       el.removeEventListener('pointerleave', onLeave);
-      pickGeo.dispose();
-      pickMat.dispose();
+      geo.dispose();
+      mat.dispose();
+      tex.dispose();
+      bgTex.dispose();
       xyzGeo.dispose();
       xyzMat.dispose();
       wGeo.dispose();
       wMat.dispose();
-      spriteGeo.dispose();
-      spriteMat.dispose();
-      atlas.dispose();
-      bgTex.dispose();
       renderer.dispose();
       if (el.parentElement === wrap) wrap.removeChild(el);
     };
@@ -557,8 +540,7 @@ export default function Board3D({ g }: { g: GameApi }) {
               {a.name} · {a.cn}
             </span>
           ))}
-          <span className="mt-0.5 text-cyan-300/80">青线 XYZ 棱</span>
-          <span className="text-pink-300/80">粉线 W 棱</span>
+          <span className="mt-0.5 text-slate-500">悬停展开超立方体</span>
         </div>
 
         {tipInfo && tip && (
@@ -591,7 +573,7 @@ export default function Board3D({ g }: { g: GameApi }) {
 
       <div className="px-1 font-mono text-[10px] text-slate-500">
         左键 揭开 · 右键 标旗 · 拖拽 {drag4d ? '四维超旋转' : '环绕'} ·{' '}
-        {drag4d ? '工具条可切回环绕' : 'Shift+拖拽或工具条切换 = 四维超旋转'} · 滚轮 缩放
+        {drag4d ? '工具条可切回环绕' : 'Shift+拖拽或工具条切换 = 四维超旋转'} · 悬停看超立方体 · 滚轮 缩放
       </div>
     </div>
   );

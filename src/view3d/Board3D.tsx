@@ -18,13 +18,16 @@ varying vec2 vUv;
 varying vec3 vN;
 varying float vTile;
 varying float vHot;
+varying float vOpen;
 attribute float aTile;
 attribute float aHot;
+attribute float aOpen;
 void main() {
   vUv = uv;
   vN = normal;
   vTile = aTile;
   vHot = aHot;
+  vOpen = aOpen;
   vec4 p = instanceMatrix * vec4(position, 1.0);
   gl_Position = projectionMatrix * modelViewMatrix * p;
 }
@@ -38,6 +41,7 @@ varying vec2 vUv;
 varying vec3 vN;
 varying float vTile;
 varying float vHot;
+varying float vOpen;
 void main() {
   float t = floor(vTile + 0.5);
   float col = mod(t, uCols);
@@ -56,7 +60,8 @@ void main() {
   vec3 c = tex.rgb * (0.80 + 0.30 * d + 0.36 * fill);
   c = mix(c, vec3(0.14, 0.83, 0.93), vHot * 0.45);
   c += vec3(0.05, 0.45, 0.55) * vHot * vHot * 0.35;
-  gl_FragColor = vec4(c, 1.0);
+  float a = mix(1.0, 0.38, vOpen);
+  gl_FragColor = vec4(c, a);
 }
 `;
 
@@ -142,14 +147,20 @@ export default function Board3D({ g }: { g: GameApi }) {
     const geo = new THREE.BoxGeometry(0.92, 0.92, 0.92);
     const tileAttr = new THREE.InstancedBufferAttribute(new Float32Array(total), 1);
     const hotAttr = new THREE.InstancedBufferAttribute(new Float32Array(total), 1);
+    const openAttr = new THREE.InstancedBufferAttribute(new Float32Array(total), 1);
+    const scaleArr = new Float32Array(total);
     tileAttr.setUsage(THREE.DynamicDrawUsage);
     hotAttr.setUsage(THREE.DynamicDrawUsage);
+    openAttr.setUsage(THREE.DynamicDrawUsage);
     geo.setAttribute('aTile', tileAttr);
     geo.setAttribute('aHot', hotAttr);
+    geo.setAttribute('aOpen', openAttr);
     const mat = new THREE.ShaderMaterial({
       vertexShader: VERT,
       fragmentShader: FRAG,
       uniforms: { uAtlas: { value: tex }, uCols: { value: COLS }, uRows: { value: ROWS } },
+      transparent: true,
+      depthWrite: false,
     });
     const mesh = new THREE.InstancedMesh(geo, mat, total);
     mesh.frustumCulled = false;
@@ -183,15 +194,20 @@ export default function Board3D({ g }: { g: GameApi }) {
     const syncTiles = () => {
       const b = gameRef.current.board;
       const tArr = tileAttr.array as Float32Array;
+      const oArr = openAttr.array as Float32Array;
       for (let k = 0; k < total; k++) {
         const st = b.state[k];
         let id = T_HIDDEN;
         if (st === 2) id = b.over && !b.mines[k] ? T_WRONG : T_FLAG;
         else if (st === 1 && b.mines[k]) id = b.exploded === k ? T_BOOM : T_MINE;
         else if (st === 1) id = b.counts[k] === 0 ? 1 : T_NUM(b.counts[k]);
-        tArr[k] = id;
+       tArr[k] = id;
+        const opened = st === 1 ? 1 : 0;
+        oArr[k] = opened;
+        scaleArr[k] = opened ? 0.62 : 1;
       }
       tileAttr.needsUpdate = true;
+      openAttr.needsUpdate = true;
     };
     syncRef.current = syncTiles;
     syncTiles();
@@ -381,9 +397,9 @@ export default function Board3D({ g }: { g: GameApi }) {
       const cz0 = sumZ * inv;
 
       for (let k = 0; k < total; k++) {
-        let s = proj[k * 4 + 3];
+        let s = scaleArr[k] * proj[k * 4 + 3];
         if (k === exp) s *= 1 + 0.16 * Math.sin(t * 7);
-        if (k === hover) s *= 1.03;
+        if (k === hover)s *= 1.06;
         vp.set(proj[k * 4] - cx0, proj[k * 4 + 1] - cy0, proj[k * 4 + 2] - cz0);
         sc.setScalar(s);
         m4.compose(vp, q0, sc);

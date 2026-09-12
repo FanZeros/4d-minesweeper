@@ -59,7 +59,7 @@ export default function HelpModal({ open, onClose }: Props) {
           </Section>
 
           <Section icon={<Boxes size={15} />} title="3D 超投影 · 环绕四维空间">
-            默认用实体立方体保证数字可读。悬停某一格时，它会展开成超立方体线框：青色是 XYZ 棱，粉色是 W 棱（连接内外立方体），和左上角 Logo 同构。
+            未揭开格是实体立方体，保证扫雷可读。揭开后格子变半透明并缩小，露出内部结构；悬停某一格时展开成超立方体线框（青 XYZ / 粉 W），和左上角 Logo 同构。
             拖拽环绕观察；Shift+拖拽（或点工具条切换到 4D 模式）会让棋盘在
             <span className="font-mono text-cyan-300"> XW / YW </span>
             平面内做真正的四维旋转。左键揭开、右键标旗、滚轮缩放。

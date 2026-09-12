@@ -18,10 +18,10 @@ export interface Difficulty {
 }
 
 export const DIFFICULTIES: Difficulty[] = [
-  { id: 'nano', name: '微界', sub: '2⁴ · 3 雷', n: 2, mines: 3 },
-  { id: 'rookie', name: '新域', sub: '3⁴ · 12 雷', n: 3, mines: 12 },
-  { id: 'standard', name: '标准', sub: '4⁴ · 20 雷', n: 4, mines: 20 },
-  { id: 'expert', name: '超维', sub: '5⁴ · 60 雷', n: 5, mines: 60 },
+  { id: 'nano', name: '微界', sub: '2⁴ · 4 雷', n: 2, mines: 4 },
+  { id: 'rookie', name: '新域', sub: '3⁴ · 16 雷', n: 3, mines: 16 },
+  { id: 'standard', name: '标准', sub: '4⁴ · 40 雷', n: 4, mines: 40 },
+  { id: 'expert', name: '超维', sub: '5⁴ · 100 雷', n: 5, mines: 100 },
 ];
 
 /** 视角状态: h/v = 当前显示的水平/垂直轴; pos = 每个切片轴上的位置 */
